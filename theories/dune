@@ -1,0 +1,6 @@
+(rocq.theory
+ (name Wasmopt)
+ (package rocq-wasm-opt)
+ (theories Wasm Stdlib mathcomp compcert ExtLib Flocq HB parseque elpi elpi_elpi)
+ (modules pipeline coalesce_locals coalesce_locals_correct alloc_correct
+          toplevel_spec instantiation toplevel_correct))

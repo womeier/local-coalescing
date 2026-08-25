@@ -1,0 +1,13 @@
+_build/
+session-*.md
+.lia.cache
+rocq_mcp_cache_*.v
+foo_opt.wasm
+sha_opt.wasm
+sha.glob
+.sha.*
+*.wat
+*.install
+result
+examples/regression/*.opt.wasm
+!examples/regression/*.wat

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rocq-mcp": {
+      "command": "/nix/store/vg4c42vl5pcybnx2a4sgc726iwswsx4p-rocq-mcp-0.3.1/bin/rocq-mcp",
+      "args": []
+    }
+  }
+}

@@ -1,0 +1,11 @@
+(rocq.extraction
+ (prelude extraction)
+ (extracted_files pipeline.ml pipeline.mli)
+ (theories Wasm Stdlib Wasmopt mathcomp compcert ExtLib Flocq HB parseque elpi elpi_elpi))
+
+(executable
+ (name main)
+ (public_name wasm-opt)
+ (package rocq-wasm-opt)
+ (flags :standard -w -a)
+ (modules main pipeline))
