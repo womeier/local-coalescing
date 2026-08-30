@@ -40,17 +40,22 @@
     1. Type preservation.  [instantiate] carries [module_typing m _ _] as a
        conjunct, so producing an instantiation of [coalesce_module m] requires
        the coalesced module to validate.  Merging two locals of different
-       value types onto one slot would break that, since [apply_phi_func]
-       leaves [modfunc_locals] unchanged and a slot keeps its originally
-       declared type.  Slot selection is type-aware and [module_supported]
-       accepts only all-i32 locals; [module_typing_coalesce]
-       (instantiation.v) is the result.
+       value types onto one slot would break that: the pass drops a *suffix*
+       of [modfunc_locals] and never reorders it, so a slot that survives
+       keeps its originally declared type.  Slot selection is type-aware and
+       [module_supported] accepts only all-i32 locals;
+       [module_typing_coalesce] (instantiation.v) is the result.  The
+       shortened vector must also still be long enough for every renamed
+       index, which is what [slot_bound] is for, and still defaultable,
+       which a prefix of a defaultable vector is.
 
-    2. Instantiation preservation.  The pass touches only [modfunc_body],
-       leaving [modfunc_type], [modfunc_locals], globals, elems, datas, start
-       and exports alone, so allocation proceeds identically --
+    2. Instantiation preservation.  The pass touches [modfunc_body] and the
+       tail of [modfunc_locals], leaving [modfunc_type], globals, elems,
+       datas, start and exports alone, so allocation proceeds identically --
        [alloc_module_coalesce], and [coalesce_instantiate] above it
-       (instantiation.v).
+       (instantiation.v).  A coalesced function's activation therefore has
+       *fewer* slots than the original's, which is why [code_rel] relates
+       two default vectors rather than fixing one.
 
     3. Call equivalence.  The per-frame, liveness-keyed simulation, in both
        directions: [sim_step_store] and [sim_step_store_bwd], closed under
