@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Install Nix
       - uses: cachix/install-nix-action@v31
@@ -18,7 +18,7 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
 
       # Set up Cachix (womeier; cachix-action degrades to read-only on PRs)
-      - uses: cachix/cachix-action@v12
+      - uses: cachix/cachix-action@v17
         with:
           name: womeier
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
