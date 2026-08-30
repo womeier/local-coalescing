@@ -95,6 +95,7 @@
             echo "  ocaml:    $(ocaml -version)"
             echo "  dune:     $(dune --version)"
             echo "  rocq-mcp: ${mcp.rocq-mcp.name}"
+            echo "  binaryen: ${pkgs.binaryen.version}"
           '';
         };
       }
