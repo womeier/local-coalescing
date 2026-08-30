@@ -11,22 +11,6 @@ The pass is extracted to OCaml and tested on CertiRocq's benchmarks.
 
 Unsupported functions remain unchanged.
 
-### What the pass does
-Locals with disjoint live ranges are packed onto shared slots, and the declared
-locals a function no longer reaches are then dropped, so the optimised function
-declares fewer of them:
-
-| binary | funcs | declared locals | after |
-|---|---|---|---|
-| `examples/foo.wasm` | 6 | 46 | 22 |
-| `examples/sha.wasm` | 119 | 4379 | 1607 |
-
-A local a function declares but never mentions blocks the truncation at its own
-index: it is left at its own slot, so the frame still has to be long enough for
-it. CertiRocq emits no such locals — and a local *read* without ever being
-written makes the walk reject the function outright, rather than leaving it
-unmentioned.
-
 ### Setup and Examples
 A setup with nix is recommended:
 ```sh
