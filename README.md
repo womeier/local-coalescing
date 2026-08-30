@@ -29,11 +29,8 @@ same function on the original.
 This composes with CertiRocq's [`toplevel_theorem.v`](https://github.com/CertiRocq/certirocq/blob/main/theories/CodegenWasm/toplevel_theorem.v),
 whose `LambdaANF_Wasm_related` runs the program from `Build_frame [] (f_inst fr)` after `instantiate`.
 
-`coalesce_module_correct` in
-[`theories/toplevel_correct.v`](./theories/toplevel_correct.v) is `Qed`. Its
-statement is the last definition in
-[`theories/toplevel_spec.v`](./theories/toplevel_spec.v), reproduced here with
-the binder types elided:
+The main statement is `coalesce_module_correct` in [`theories/toplevel_correct.v`](./theories/toplevel_correct.v),
+it proves the specification [`theories/toplevel_spec.v`](./theories/toplevel_spec.v):
 
 ```coq
 Definition call_equiv (s s_opt : store_record) (f f_opt : frame) : Prop :=
@@ -75,7 +72,9 @@ Definition coalesce_module_correct_statement : Prop :=
   check them. Immediate when the store holds only host functions, as in CertiRocq.
 
 
-The proof is complete, we don't introduce any axioms in addition to WasmCert. WasmCert's binary parsing and printing are currently unverified and trusted.
+### TCB
+WasmCert's binary parsing and printing are currently unverified and trusted.
+We don't introduce any axioms in addition to WasmCert.
 ```sh
 just print_assumptions
 ```
