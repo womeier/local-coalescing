@@ -47,6 +47,13 @@ jobs:
         run: |
           nix develop --command bash -c "just sha_ci"
 
+      # sha.wasm as .wat before and after the pass, with a per-function
+      # count of the locals each side declares, against wasm-opt
+      # --coalesce-locals on the same input.
+      - name: Wat diff
+        run: |
+          nix develop --command bash -c "just sha_wat_diff_ci"
+
       # - name: Print assumptions
       #   run: |
       #     nix develop --command bash -c "just print_assumptions"

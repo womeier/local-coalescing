@@ -25,6 +25,18 @@ sha_ci:
     result/bin/wasm-opt-cert examples/sha.wasm examples/sha_opt.wasm
     (cd examples && node sha.js)
 
+# sha.wasm printed as .wat before and after the pass, plus a per-function
+# count of the locals each side declares, next to what
+# `wasm-opt --coalesce-locals` gets on the same input.
+sha_wat_diff: build
+    dune exec ./src/main.exe -- examples/sha.wasm examples/sha_opt.wasm
+    python3 examples/wat_diff.py examples/sha.wasm examples/sha_opt.wasm
+
+# Same, for CI, on the same `nix build` assumption as sha_ci.
+sha_wat_diff_ci:
+    result/bin/wasm-opt-cert examples/sha.wasm examples/sha_opt.wasm
+    python3 examples/wat_diff.py examples/sha.wasm examples/sha_opt.wasm
+
 clean:
     dune clean
 
