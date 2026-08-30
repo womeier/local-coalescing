@@ -75,7 +75,7 @@ Definition coalesce_module_correct_statement : Prop :=
   check them. Immediate when the store holds only host functions, as in CertiRocq.
 
 
-The proof is complete, we don't introduce any axioms in addition to WasmCert.
+The proof is complete, we don't introduce any axioms in addition to WasmCert. WasmCert's binary parsing and printing are currently unverified and trusted.
 ```sh
 just print_assumptions
 ```
