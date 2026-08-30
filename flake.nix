@@ -37,8 +37,8 @@
           };
         });
 
-        wasm-opt = rocqPackages.mkRocqDerivation {
-          pname = "wasm-opt";
+        wasm-opt-cert = rocqPackages.mkRocqDerivation {
+          pname = "wasm-opt-cert";
           version = "dev";
           src = lib.cleanSource self;
           useDune = true;
@@ -56,13 +56,13 @@
         };
       in
       {
-        packages.default = wasm-opt;
-        packages.wasm-opt = wasm-opt;
+        packages.default = wasm-opt-cert;
+        packages.wasm-opt-cert = wasm-opt-cert;
         packages.rocq-mcp = mcp.rocq-mcp;
         packages.rocq-mcp-wheelhouse = mcp.rocq-mcp-wheelhouse;
         packages.pytanque = mcp.pytanque;
         devShells.default = pkgs.mkShell {
-          name = "wasm-opt";
+          name = "wasm-opt-cert";
           packages = [
             rocq-core
             # provides the `pet` binary rocq-mcp's interactive tools need.
@@ -87,7 +87,7 @@
             # ROCQ_WORKSPACE must be the live checkout, not the store copy
             # of ${self} (which omits untracked files).
             export ROCQ_WORKSPACE="$PWD"
-            echo "wasm-opt development environment"
+            echo "wasm-opt-cert development environment"
             echo "  rocq:     $(rocq --version | head -1)"
             echo "  ocaml:    $(ocaml -version)"
             echo "  dune:     $(dune --version)"

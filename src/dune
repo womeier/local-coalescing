@@ -5,7 +5,7 @@
 
 (executable
  (name main)
- (public_name wasm-opt)
- (package rocq-wasm-opt)
+ (public_name wasm-opt-cert)
+ (package rocq-wasm-opt-cert)
  (flags :standard -w -a)
  (modules main pipeline))
