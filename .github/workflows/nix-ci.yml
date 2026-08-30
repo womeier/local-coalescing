@@ -31,23 +31,22 @@ jobs:
           cachix use math-comp
 
       # Build the OCaml extraction and push it to Cachix
-      # - name: Nix build
-      #   run: |
-      #     nix build
-      #     cachix push womeier result
-
-      # Build and push dev environment to Cachix
-      - name: Build and push dev environment
+      - name: Nix build
         run: |
           nix build
-          # nix develop --profile dev-profile -c true
-          # cachix push womeier dev-profile
+          cachix push womeier result
+
+      # Build and push dev environment to Cachix
+      # - name: Build and push dev environment
+      #   run: |
+      #     nix develop --profile dev-profile -c true
+      #     cachix push womeier dev-profile
 
       # Enter Nix development environment and run an example
       - name: Run example
         run: |
-          nix develop --command bash -c "just sha"
+          nix develop --command bash -c "just sha_ci"
 
-      - name: Print assumptions
-        run: |
-          nix develop --command bash -c "just print_assumptions"
+      # - name: Print assumptions
+      #   run: |
+      #     nix develop --command bash -c "just print_assumptions"

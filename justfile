@@ -17,6 +17,14 @@ sha_check: build
     dune exec ./src/main.exe -- examples/sha.wasm examples/sha_opt.wasm
     (cd examples && python3 compare_output.py sha.js sha_output.txt)
 
+# Same example, but for CI: skips the `build` prerequisite on the
+# assumption that `nix build` already produced the extraction at result/.
+sha_ci:
+    @echo
+    @echo "The wasmcert parser is quite slow (sha.wasm ~ 175KB), this may take ~20s..."
+    result/bin/wasm-opt-cert examples/sha.wasm examples/sha_opt.wasm
+    (cd examples && node sha.js)
+
 clean:
     dune clean
 
