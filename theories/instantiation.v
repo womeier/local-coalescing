@@ -46,24 +46,43 @@ Context `{hfc : host_function_class} `{memory : BlockUpdateMemory} `{ho : host}.
 
    The second conjunct of [code_rel] is the frame agreement a fresh
    activation needs.  It is not free: [r_invoke_native] builds
-   [f_locs := vs ++ defaults] on both sides, and [R_phi_live] then asks
-   that a live local and its slot hold equal values there.  Below the
+   [f_locs := vs ++ defaults] from the callee's *declared* locals, and
+   the optimized callee declares fewer, so the two activations no
+   longer even have the same number of slots -- which is why the
+   default vector on the optimized side is existential here rather than
+   the same [defaults] as on the source side, and why [code_rel] no
+   longer fixes [modfunc_locals] -- only that the two vectors are
+   defaultable together, which is what lets each direction of the
+   simulation build the callee frame the other one entered.
+   [R_phi_live] then asks that a live
+   local and its slot hold equal values in those two frames.  Below the
    parameter count phi is the identity, so that is trivial; above it
    every local starts at its default, and [module_supported] forces
-   every local to be i32, so all the defaults are the same value.  That
-   is the argument [frames_agree_entry] discharges. *)
+   every local to be i32, so all the defaults are the same value and
+   the shorter vector is a prefix of the longer.  That is the argument
+   [frames_agree_entry] discharges; the slot stays inside the shorter
+   vector because [slot_bound] is by construction above phi's image. *)
 
 Definition code_rel (ts1 : list value_type) (code code_opt : module_func) : Prop :=
   modfunc_type code_opt = modfunc_type code /\
-  modfunc_locals code_opt = modfunc_locals code /\
+  (default_vals (modfunc_locals code) = None
+     <-> default_vals (modfunc_locals code_opt) = None) /\
   exists phi,
     rel_bs phi (fun _ => False) (modfunc_body code) (modfunc_body code_opt) /\
-    forall inst vs defaults (L : N -> Prop),
+    forall inst vs defaults defaults_opt (L : N -> Prop),
       length vs = length ts1 ->
-      default_vals (modfunc_locals code) = Some defaults ->
+      default_vals (modfunc_locals code)     = Some defaults ->
+      default_vals (modfunc_locals code_opt) = Some defaults_opt ->
       frames_agree phi L
-        {| f_locs := seq.cat vs defaults; f_inst := inst |}
-        {| f_locs := seq.cat vs defaults; f_inst := inst |}.
+        {| f_locs := seq.cat vs defaults;     f_inst := inst |}
+        {| f_locs := seq.cat vs defaults_opt; f_inst := inst |}.
+
+Lemma defaults_of_not_none : forall ts,
+  default_vals ts <> None -> exists ds, default_vals ts = Some ds.
+Proof.
+  intros ts H. destruct (default_vals ts) as [ds |] eqn:E;
+    [ exists ds; reflexivity | exfalso; apply H; reflexivity ].
+Qed.
 
 Definition funcinst_rel (fi fi_opt : funcinst) : Prop :=
   match fi with
@@ -126,12 +145,19 @@ Definition cfg_frame
 (* ── 2. Typing preservation ───────────────────────────────────────
    [instantiate] carries [module_typing] as a conjunct, so the
    coalesced module has to validate.  The pass leaves [modfunc_type]
-   and [modfunc_locals] alone, so the typing context is unchanged and
-   the obligation is entirely about the body: a renamed local.get /
-   local.set must have the same type as the original.  That holds
-   because [module_supported] forces every local to be i32 and phi
-   stays inside the declared slot range, so the renamed index has the
-   same declared type. *)
+   alone but shortens [modfunc_locals], so the two bodies are typed in
+   contexts that differ in [tc_locals] and nothing else, and the
+   obligation is: a renamed local.get / local.set resolves in the
+   *shortened* context, at the same type.  That holds because
+   [module_supported] forces every local to be i32 -- so any slot that
+   resolves has the right type -- and [slot_bound] is by construction
+   above every slot phi can produce, so the renamed index still
+   resolves.
+
+   The declared-local count also feeds [module_func_typing]'s third
+   conjunct, [default_vals t_locs <> None]; the kept locals are a
+   prefix of the original, and [those] on a prefix of a defined list is
+   defined. *)
 
 Lemma map_apply_phi_cat : forall phi (l1 l2 : list basic_instruction),
   List.map (apply_phi phi) (seq.cat l1 l2)
@@ -141,54 +167,91 @@ Proof.
     [reflexivity | rewrite IH; reflexivity].
 Qed.
 
-(* The whole of the local-index case: the original index resolves, so it
-   is in range; phi keeps it in range; and every slot has the same type,
-   so the renamed index resolves to the same one. *)
-Lemma i32_lookup_phi : forall C phi x t,
-  List.Forall (fun u => u = T_num T_i32) (tc_locals C) ->
-  (forall i, N.to_nat i < length (tc_locals C) ->
-             N.to_nat (apply_phi_local phi i) < length (tc_locals C)) ->
-  lookup_N (tc_locals C) x = Some t ->
-  lookup_N (tc_locals C) (apply_phi_local phi x) = Some t.
+Lemma Forall_firstn : forall (A : Type) (P : A -> Prop) k l,
+  List.Forall P l -> List.Forall P (List.firstn k l).
 Proof.
-  intros C phi x t Hi32 Hrange Hx.
-  assert (Hlt : N.to_nat x < length (tc_locals C)).
+  intros A P k l H. apply Forall_forall. intros x Hx.
+  apply (proj1 (Forall_forall _ _) H).
+  rewrite <- (firstn_skipn k l). apply in_or_app. left. exact Hx.
+Qed.
+
+(* Every i32 local defaults to the same zero, so the default vector of a
+   list of them is fixed by its length alone.  This is what makes the
+   truncation invisible at a fresh activation: the shortened frame is a
+   prefix of the full one, and every slot the renamed body reaches lies
+   inside it.  It also re-establishes [module_func_typing]'s
+   defaultability conjunct for the kept locals. *)
+Lemma default_vals_i32 : forall ts,
+  List.Forall (fun t => t = T_num T_i32) ts ->
+  default_vals ts = Some (List.repeat (VAL_num (bitzero T_i32)) (length ts)).
+Proof.
+  intros ts H. unfold default_vals. rewrite <- those_those0.
+  induction H as [| t ts' Ht Hts IH]; [reflexivity |].
+  subst t. simpl. rewrite IH. reflexivity.
+Qed.
+
+(* The whole of the local-index case: the original index resolves, so it
+   is in range; phi lands it in range of the *shortened* vector; and
+   every slot of either vector is i32, so it resolves to the same type. *)
+Lemma i32_lookup_phi : forall locs locs' phi x t,
+  List.Forall (fun u => u = T_num T_i32) locs ->
+  List.Forall (fun u => u = T_num T_i32) locs' ->
+  (forall i, N.to_nat i < length locs ->
+             N.to_nat (apply_phi_local phi i) < length locs') ->
+  lookup_N locs x = Some t ->
+  lookup_N locs' (apply_phi_local phi x) = Some t.
+Proof.
+  intros locs locs' phi x t Hi32 Hi32' Hrange Hx.
+  assert (Hlt : N.to_nat x < length locs).
   { apply nth_error_Some. unfold lookup_N in Hx. rewrite Hx. discriminate. }
   assert (Ht : t = T_num T_i32).
   { apply (proj1 (Forall_forall _ _) Hi32). eapply nth_error_In. exact Hx. }
   pose proof (Hrange x Hlt) as Hr.
   unfold lookup_N in *.
-  destruct (nth_error (tc_locals C) (N.to_nat (apply_phi_local phi x)))
+  destruct (nth_error locs' (N.to_nat (apply_phi_local phi x)))
     as [u |] eqn:E.
   - f_equal. rewrite Ht.
-    apply (proj1 (Forall_forall _ _) Hi32). eapply nth_error_In. exact E.
+    apply (proj1 (Forall_forall _ _) Hi32'). eapply nth_error_In. exact E.
   - exfalso. apply nth_error_None in E. lia.
 Qed.
 
-Lemma be_typing_apply_phi : forall C phi bs tf,
-  List.Forall (fun t => t = T_num T_i32) (tc_locals C) ->
-  (forall i, N.to_nat i < length (tc_locals C) ->
-             N.to_nat (apply_phi_local phi i) < length (tc_locals C)) ->
-  be_typing C bs tf ->
-  be_typing C (List.map (apply_phi phi) bs) tf.
+(* [upd_local] and [upd_label] write disjoint fields of the record, so
+   they commute -- which is what lets the induction below descend
+   through block, loop and if, where the sub-derivation is taken in a
+   context whose labels have been pushed. *)
+Lemma upd_local_label_comm : forall C locs lab,
+  upd_label (upd_local C locs) lab = upd_local (upd_label C lab) locs.
 Proof.
-  intros C phi bs tf H1 H2 Hty. revert H1 H2.
-  induction Hty; intros Hi32 Hrange; simpl.
-  (* every instruction apply_phi leaves alone *)
+  intros C locs lab. unfold upd_label, upd_local, upd_local_label_return.
+  reflexivity.
+Qed.
+
+Lemma be_typing_apply_phi : forall C phi locs' bs tf,
+  List.Forall (fun t => t = T_num T_i32) (tc_locals C) ->
+  List.Forall (fun t => t = T_num T_i32) locs' ->
+  (forall i, N.to_nat i < length (tc_locals C) ->
+             N.to_nat (apply_phi_local phi i) < length locs') ->
+  be_typing C bs tf ->
+  be_typing (upd_local C locs') (List.map (apply_phi phi) bs) tf.
+Proof.
+  intros C phi locs' bs tf H1 H2 H3 Hty. revert H1 H2 H3.
+  induction Hty; intros Hi32 Hi32' Hrange; simpl.
+  (* every instruction apply_phi leaves alone; upd_local touches no
+     field any of these rules reads *)
   all: try (solve [ econstructor; eassumption ]).
   all: try (solve [ constructor; assumption ]).
   (* the structured instructions: upd_label does not touch tc_locals *)
-  - apply bet_block; [exact H |].
+  - apply bet_block; [exact H |]. rewrite upd_local_label_comm.
     apply IHHty; unfold upd_label; cbn [tc_locals]; assumption.
-  - apply bet_loop; [exact H |].
+  - apply bet_loop; [exact H |]. rewrite upd_local_label_comm.
     apply IHHty; unfold upd_label; cbn [tc_locals]; assumption.
-  - apply bet_if_wasm; [exact H | |];
+  - apply bet_if_wasm; [exact H | |]; rewrite upd_local_label_comm;
       [ apply IHHty1 | apply IHHty2 ];
       unfold upd_label; cbn [tc_locals]; assumption.
   (* the three that phi actually rewrites *)
-  - apply bet_local_get. apply i32_lookup_phi; assumption.
-  - apply bet_local_set. apply i32_lookup_phi; assumption.
-  - apply bet_local_tee. apply i32_lookup_phi; assumption.
+  - apply bet_local_get. apply (i32_lookup_phi (tc_locals C)); assumption.
+  - apply bet_local_set. apply (i32_lookup_phi (tc_locals C)); assumption.
+  - apply bet_local_tee. apply (i32_lookup_phi (tc_locals C)); assumption.
   (* and the two structural rules *)
   - rewrite map_apply_phi_cat.
     eapply bet_composition;
@@ -196,11 +259,73 @@ Proof.
   - eapply bet_subtyping; [apply IHHty; assumption | exact H].
 Qed.
 
-(* modfunc_type and modfunc_locals survive the pass untouched, so the
-   typing context is the same one and only the body has to be re-typed.
-   The two side conditions be_typing_apply_phi wants are exactly what
-   func_supported buys: every slot is i32, and phi stays inside the
-   declared range (alloc_correct's compute_phi_range). *)
+(* The typing obligation, with every dependence on how pc, n and tys
+   are computed discharged in the hypotheses.  Stating it this way keeps
+   the record projections out of the proof: what matters is only that
+   the slot vector is the parameters followed by the locals, that both
+   halves are i32, and that the body types in the full context. *)
+Lemma module_func_typing_coalesce_aux :
+  forall C x tn tm t_locs b_es tys pc n,
+    tys = seq.cat tn t_locs ->
+    pc = N.of_nat (length tn) ->
+    n = N.of_nat (length tn + length t_locs) ->
+    List.Forall (fun t => t = T_num T_i32) tn ->
+    List.Forall (fun t => t = T_num T_i32) t_locs ->
+    tys_uniform tys pc n (T_num T_i32) ->
+    lookup_N (tc_types C) x = Some (Tf tn tm) ->
+    be_typing (upd_local_label_return C (seq.cat tn t_locs) (tm :: nil) (Some tm))
+              b_es (Tf nil tm) ->
+    let phi := compute_phi tys pc n b_es in
+    module_func_typing C
+      {| modfunc_type := x;
+         modfunc_locals :=
+           List.firstn (N.to_nat (slot_bound pc n phi - pc)) t_locs;
+         modfunc_body := List.map (apply_phi phi) b_es |}
+      (Tf tn tm).
+Proof.
+  intros C x tn tm t_locs b_es tys pc n Htys Hpc Hn Hn32 Hl32 Huni Hlk Hbe phi.
+  assert (Hlo : (pc <= slot_bound pc n phi)%N) by apply slot_bound_ge.
+  assert (Hhi : (slot_bound pc n phi <= n)%N).
+  { apply (compute_phi_bound_le _ _ _ (T_num T_i32)); [exact Huni | lia]. }
+  set (k := N.to_nat (slot_bound pc n phi - pc)) in *.
+  assert (Hk : length (List.firstn k t_locs) = k)
+    by (apply firstn_length_le; unfold k; lia).
+  assert (Hkept : List.Forall (fun t => t = T_num T_i32)
+                    (seq.cat tn (List.firstn k t_locs))).
+  { apply Forall_forall. intros t Ht. apply in_app_or in Ht.
+    destruct Ht as [Ht | Ht].
+    - exact (proj1 (Forall_forall _ _) Hn32 t Ht).
+    - exact (proj1 (Forall_forall _ _) (Forall_firstn _ _ k _ Hl32) t Ht). }
+  assert (Hfull : List.Forall (fun t => t = T_num T_i32) (seq.cat tn t_locs)).
+  { apply Forall_forall. intros t Ht. apply in_app_or in Ht.
+    destruct Ht as [Ht | Ht].
+    - exact (proj1 (Forall_forall _ _) Hn32 t Ht).
+    - exact (proj1 (Forall_forall _ _) Hl32 t Ht). }
+  assert (Hlen : length (seq.cat tn (List.firstn k t_locs)) = length tn + k).
+  { change (seq.cat tn (List.firstn k t_locs))
+      with (tn ++ List.firstn k t_locs).
+    rewrite length_app. rewrite Hk. reflexivity. }
+  split; [exact Hlk | split].
+  - apply (be_typing_apply_phi
+             (upd_local_label_return C (seq.cat tn t_locs) (tm :: nil) (Some tm))
+             phi (seq.cat tn (List.firstn k t_locs)));
+      [ unfold upd_local_label_return; cbn [tc_locals]; exact Hfull
+      | exact Hkept
+      | unfold upd_local_label_return; cbn [tc_locals]
+      | exact Hbe ].
+    intros i Hi. rewrite Hlen.
+    assert (Hcat : length (seq.cat tn t_locs) = length tn + length t_locs)
+      by (rewrite <- length_app; reflexivity).
+    rewrite Hcat in Hi.
+    pose proof (compute_phi_below_bound tys pc n b_es i ltac:(lia)) as Hr.
+    unfold phi in *. unfold k. lia.
+  - rewrite (default_vals_i32 _ (Forall_firstn _ _ k _ Hl32)). discriminate.
+Qed.
+
+(* [modfunc_type] survives the pass untouched, so the type table entry
+   is the hypothesis unchanged; [modfunc_locals] loses a suffix, so the
+   two bodies are typed in contexts differing only in [tc_locals], and
+   [be_typing_apply_phi] bridges exactly that. *)
 Lemma module_func_typing_coalesce : forall types C f tf,
   func_supported types f = true ->
   tc_types C = types ->
@@ -210,32 +335,29 @@ Proof.
   intros types C f tf Hs Hc Hty.
   destruct f as [x t_locs b_es]. destruct tf as [tn tm].
   destruct Hty as [Hlk [Hbe Hdef]].
-  unfold coalesce_func_with_types, coalesce_func, apply_phi_func.
-  cbn [modfunc_type modfunc_locals modfunc_body].
-  split; [exact Hlk | split; [| exact Hdef]].
   subst types.
   assert (Hst : slot_types (tc_types C)
                   {| modfunc_type := x; modfunc_locals := t_locs;
                      modfunc_body := b_es |} = seq.cat tn t_locs).
   { unfold slot_types. cbn [modfunc_type modfunc_locals]. rewrite Hlk.
     reflexivity. }
-  assert (Hn : func_total_locals (tc_types C)
-                 {| modfunc_type := x; modfunc_locals := t_locs;
-                    modfunc_body := b_es |}
-               = N.of_nat (length (seq.cat tn t_locs))).
-  { rewrite <- slot_types_length. rewrite Hst. reflexivity. }
-  apply be_typing_apply_phi.
-  - unfold upd_local_label_return. cbn [tc_locals].
-    rewrite <- Hst. apply Forall_forall. intros t Ht.
+  assert (Hi32 : List.Forall (fun t => t = T_num T_i32) (seq.cat tn t_locs)).
+  { rewrite <- Hst. apply Forall_forall. intros t Ht.
     apply value_type_eqb_eq.
-    exact (proj1 (forallb_forall _ _) (func_supported_i32 _ _ Hs) t Ht).
-  - unfold upd_local_label_return. cbn [tc_locals]. intros i Hi.
-    assert (Hlt : (i < func_total_locals (tc_types C)
-                     {| modfunc_type := x; modfunc_locals := t_locs;
-                        modfunc_body := b_es |})%N) by (rewrite Hn; lia).
-    pose proof (compute_phi_range _ _ _ (T_num T_i32) b_es i
-                  (func_supported_uniform _ _ Hs) Hlt) as Hr.
-    cbn [modfunc_type] in Hr. lia.
+    exact (proj1 (forallb_forall _ _) (func_supported_i32 _ _ Hs) t Ht). }
+  unfold coalesce_func_with_types, coalesce_func.
+  cbn [modfunc_type modfunc_locals modfunc_body].
+  eapply module_func_typing_coalesce_aux.
+  - exact Hst.
+  - unfold func_param_count. rewrite Hlk. reflexivity.
+  - unfold func_total_locals, func_param_count.
+    cbn [modfunc_type modfunc_locals]. rewrite Hlk. lia.
+  - apply Forall_forall. intros t Ht.
+    apply (proj1 (Forall_forall _ _) Hi32). apply in_or_app. left. exact Ht.
+  - apply Forall_forall. intros t Ht.
+    apply (proj1 (Forall_forall _ _) Hi32). apply in_or_app. right. exact Ht.
+  - exact (func_supported_uniform _ _ Hs).
+  - exact Hlk.
   - exact Hbe.
 Qed.
 
@@ -287,10 +409,11 @@ Qed.
 
 (* ── 3. Instantiation preservation ────────────────────────────────
    Allocation walks [mod_funcs] and stores one funcinst per entry; the
-   pass changes only [modfunc_body], so the addresses, the instance and
-   every other store section come out identical, and the two function
-   lists are pointwise [funcinst_rel] by construction --
-   [frames_agree_entry] is what supplies the second half of
+   pass changes only [modfunc_body] and the tail of [modfunc_locals],
+   neither of which allocation reads, so the addresses, the instance
+   and every other store section come out identical, and the two
+   function lists are pointwise [funcinst_rel] by construction --
+   [frames_agree_entry] is what supplies the last part of
    [code_rel].
 
    The initializers need no work of their own: [mod_globals],
@@ -326,72 +449,128 @@ Proof.
   cbn in Hy. injection Hy as Hy. subst y. exact Hny.
 Qed.
 
-Lemma frames_agree_entry : forall types f vs defaults inst L,
+(* A fresh activation of the coalesced callee.  The two frames differ:
+   the source has one slot per declared local, the optimized one only
+   the [slot_bound] many the rename can still reach.  All three
+   components of [frames_agree] turn on that bound -- the forward
+   in-range one is exactly [compute_phi_below_bound], the backward one
+   is that an index past the last local is not renamed, and the
+   agreement holds because every slot either side of the parameters
+   starts at the same i32 zero.
+
+   pc, n and phi are variables constrained by equations rather than
+   [let]s so that every hypothesis below mentions the *same* term for
+   phi's image as the goal does; otherwise the arithmetic steps see two
+   unrelated atoms. *)
+Lemma frames_agree_entry :
+  forall types f vs defaults defaults_opt inst L pc n phi,
   func_supported types f = true ->
-  N.of_nat (length vs) = func_param_count types f.(modfunc_type) ->
+  pc = func_param_count types f.(modfunc_type) ->
+  n = func_total_locals types f ->
+  phi = compute_phi (slot_types types f) pc n f.(modfunc_body) ->
+  N.of_nat (length vs) = pc ->
   default_vals f.(modfunc_locals) = Some defaults ->
-  frames_agree (compute_phi (slot_types types f)
-                  (func_param_count types f.(modfunc_type))
-                  (func_total_locals types f) f.(modfunc_body))
-               L
-               {| f_locs := seq.cat vs defaults; f_inst := inst |}
-               {| f_locs := seq.cat vs defaults; f_inst := inst |}.
+  default_vals (List.firstn (N.to_nat (slot_bound pc n phi - pc))
+                  f.(modfunc_locals)) = Some defaults_opt ->
+  frames_agree phi L
+               {| f_locs := seq.cat vs defaults;     f_inst := inst |}
+               {| f_locs := seq.cat vs defaults_opt; f_inst := inst |}.
 Proof.
-  intros types f vs defaults inst L Hs Hvs Hd.
+  intros types f vs defaults defaults_opt inst L pc n phi
+         Hs Hpc Hn Hphi Hvs Hd Hd'.
+  assert (Huni : tys_uniform (slot_types types f) pc n (T_num T_i32)).
+  { rewrite Hpc. rewrite Hn. exact (func_supported_uniform _ _ Hs). }
   assert (Hi32 : List.Forall (fun t => t = T_num T_i32) (modfunc_locals f)).
   { apply Forall_forall. intros x Hx. apply value_type_eqb_eq.
     apply (proj1 (forallb_forall _ _) (func_supported_i32 _ _ Hs) x).
     unfold slot_types. destruct (lookup_N types (modfunc_type f)) as [[ps rs] |].
     - apply in_or_app. right. exact Hx.
     - exact Hx. }
+  assert (Hi32' : List.Forall (fun t => t = T_num T_i32)
+                    (List.firstn (N.to_nat (slot_bound pc n phi - pc))
+                       (modfunc_locals f)))
+    by (apply Forall_firstn; exact Hi32).
   assert (Hdl : length defaults = length (modfunc_locals f)).
   { unfold default_vals in Hd. pose proof (those_length Hd) as H.
     rewrite length_seq_map in H. lia. }
-  assert (Hlen : N.of_nat (length (seq.cat vs defaults))
-                 = func_total_locals types f).
-  { unfold func_total_locals. rewrite <- Hvs.
-    assert (Hcat : length (seq.cat vs defaults) = length vs + length defaults)
-      by (rewrite <- length_app; reflexivity).
-    rewrite Hcat. rewrite Hdl. lia. }
+  (* the bound, and that it sits between the parameters and n *)
+  assert (Hlo : (pc <= slot_bound pc n phi)%N) by apply slot_bound_ge.
+  assert (Hnl : n = (pc + N.of_nat (length (modfunc_locals f)))%N).
+  { rewrite Hpc. rewrite Hn. unfold func_total_locals. lia. }
+  assert (Hpcn : (pc <= n)%N) by lia.
+  assert (Hhi : (slot_bound pc n phi <= n)%N).
+  { rewrite Hphi.
+    apply (compute_phi_bound_le _ _ _ (T_num T_i32));
+      [ exact Huni | exact Hpcn ]. }
+  assert (Hdl' : N.of_nat (length defaults_opt) = (slot_bound pc n phi - pc)%N).
+  { unfold default_vals in Hd'. pose proof (those_length Hd') as H.
+    rewrite length_seq_map in H.
+    rewrite firstn_length_le in H; lia. }
+  (* and the two frame lengths those fix *)
+  assert (Hcat : length (seq.cat vs defaults) = length vs + length defaults)
+    by (rewrite <- length_app; reflexivity).
+  assert (Hcat' : length (seq.cat vs defaults_opt)
+                  = length vs + length defaults_opt)
+    by (rewrite <- length_app; reflexivity).
+  assert (Hlen : N.of_nat (length (seq.cat vs defaults)) = n)
+    by (rewrite Hcat; rewrite Hdl; lia).
+  assert (Hlen' : N.of_nat (length (seq.cat vs defaults_opt))
+                  = slot_bound pc n phi)
+    by (rewrite Hcat'; lia).
   cbn [f_locs f_inst].
   split; [reflexivity | split; [| split]].
-  { cbn [f_locs]. intros i Hi.
-    pose proof (compute_phi_range _ _ _ (T_num T_i32) (modfunc_body f) i
-                  (func_supported_uniform _ _ Hs) ltac:(lia)) as Hr.
-    lia. }
-  { (* backwards: an index past the last local is not renamed, so its slot
-       is itself and is out of range on the other side too *)
+  { (* forwards: the bound is above everything phi can produce *)
     cbn [f_locs]. intros i Hi.
-    destruct (N.leb (func_total_locals types f) i) eqn:Ege.
+    pose proof (compute_phi_below_bound (slot_types types f) pc n
+                  (modfunc_body f) i ltac:(lia)) as Hr.
+    rewrite <- Hphi in Hr. lia. }
+  { (* backwards: an index past the last local is not renamed, so its slot
+       is itself, and the optimized frame is no longer than the source one *)
+    cbn [f_locs]. intros i Hi.
+    destruct (N.leb n i) eqn:Ege.
     - apply N.leb_le in Ege.
-      rewrite (compute_phi_id_above _ _ _ _ _ Ege) in Hi. lia.
+      pose proof (compute_phi_id_above (slot_types types f) pc n
+                    (modfunc_body f) i Ege) as Hid.
+      rewrite <- Hphi in Hid. rewrite Hid in Hi. lia.
     - apply N.leb_gt in Ege. lia. }
   { cbn [f_locs]. intros i Hi _.
-    destruct (N.ltb i (func_param_count types (modfunc_type f))) eqn:Elt.
-    - (* a parameter: phi is the identity there, so the two frames agree
-         because they are the same frame *)
+    assert (Heq : forall (ds : list value), seq.cat vs ds = vs ++ ds)
+      by reflexivity.
+    destruct (N.ltb i pc) eqn:Elt.
+    - (* a parameter: phi is the identity there, and the two frames share
+         their first [length vs] slots *)
       apply N.ltb_lt in Elt.
-      rewrite (compute_phi_id_below _ _ _ _ _ Elt). reflexivity.
-    - (* a declared local: both it and its slot sit in the defaults, and
-         every default is the same i32 zero *)
+      pose proof (compute_phi_id_below (slot_types types f) pc n
+                    (modfunc_body f) i Elt) as Hid.
+      rewrite <- Hphi in Hid. rewrite Hid.
+      assert (Hi1 : N.to_nat i < length vs) by lia.
+      rewrite ! Heq.
+      rewrite (nth_error_app1 vs defaults Hi1).
+      rewrite (nth_error_app1 vs defaults_opt Hi1).
+      reflexivity.
+    - (* a declared local: both it and its slot sit past the parameters,
+         and every default is the same i32 zero *)
       apply N.ltb_ge in Elt.
-      pose proof (compute_phi_lower _ _ _ (T_num T_i32) (modfunc_body f) i
-                    (func_supported_uniform _ _ Hs) Elt ltac:(lia)) as Hlo.
-      pose proof (compute_phi_range _ _ _ (T_num T_i32) (modfunc_body f) i
-                    (func_supported_uniform _ _ Hs) ltac:(lia)) as Hhi.
-      assert (Hcat : length (seq.cat vs defaults) = length vs + length defaults)
-        by (rewrite <- length_app; reflexivity).
-      assert (Hsplit : forall k, length vs <= k ->
-                k < length (seq.cat vs defaults) ->
-                nth_error (seq.cat vs defaults) k
+      pose proof (compute_phi_lower (slot_types types f) pc n (T_num T_i32)
+                    (modfunc_body f) i Huni Elt ltac:(lia)) as Hgl.
+      rewrite <- Hphi in Hgl.
+      pose proof (compute_phi_below_bound (slot_types types f) pc n
+                    (modfunc_body f) i ltac:(lia)) as Hgh.
+      rewrite <- Hphi in Hgh.
+      assert (Hsplit : forall (ts : list value_type) ds k,
+                List.Forall (fun t => t = T_num T_i32) ts ->
+                default_vals ts = Some ds ->
+                length vs <= k -> k < length (seq.cat vs ds) ->
+                nth_error (seq.cat vs ds) k
                   = Some (VAL_num (bitzero T_i32))).
-      { intros k Hk1 Hk2.
-        assert (Heq : seq.cat vs defaults = vs ++ defaults) by reflexivity.
+      { intros ts ds k Hts Hds Hk1 Hk2.
         rewrite Heq. rewrite nth_error_app2; [| exact Hk1].
-        apply (default_vals_i32_nth (modfunc_locals f));
-          [exact Hi32 | exact Hd | lia]. }
-      rewrite Hsplit; [| lia | lia].
-      rewrite Hsplit; [reflexivity | lia | lia]. }
+        apply (default_vals_i32_nth ts); [exact Hts | exact Hds |].
+        assert (Hc : length (seq.cat vs ds) = length vs + length ds)
+          by (rewrite <- length_app; reflexivity).
+        lia. }
+      rewrite (Hsplit (modfunc_locals f) defaults _ Hi32 Hd); [| lia | lia].
+      rewrite (Hsplit _ defaults_opt _ Hi32' Hd'); [reflexivity | lia | lia]. }
 Qed.
 
 Lemma with_funcs_id : forall s, with_funcs s (s_funcs s) = s.
@@ -494,9 +673,12 @@ Proof. intros fs. unfold wf_commutes. alloc_commutes_solve. Qed.
 
 (* Every function of a supported module is related to its coalesced
    image, whether or not the walk accepted it.  Accepted: the map is
-   compute_phi's and alloc_correct supplies rel_bs.  Rejected: the map
-   is empty, the body comes back unchanged, and bs_guarded -- which
-   func_supported checks -- relates it to itself. *)
+   compute_phi's, alloc_correct supplies rel_bs, and the kept locals
+   are the [slot_bound] many prefix, whose defaults are the matching
+   prefix of the original's.  Rejected: the map is empty, so the bound
+   is n and *no* local is dropped either -- the function comes back
+   untouched, and bs_guarded, which func_supported checks, relates it
+   to itself. *)
 Lemma coalesce_func_code_rel : forall types f ts1,
   func_supported types f = true ->
   N.of_nat (length ts1) = func_param_count types (modfunc_type f) ->
@@ -505,8 +687,19 @@ Proof.
   intros types f ts1 Hs Hpc'.
   assert (Hpc : func_param_count types (modfunc_type f) = N.of_nat (length ts1))
     by (symmetry; exact Hpc').
-  unfold coalesce_func_with_types, coalesce_func, apply_phi_func.
-  split; [reflexivity | split; [reflexivity |]].
+  assert (Hi32 : List.Forall (fun t => t = T_num T_i32) (modfunc_locals f)).
+  { apply Forall_forall. intros x Hx. apply value_type_eqb_eq.
+    apply (proj1 (forallb_forall _ _) (func_supported_i32 _ _ Hs) x).
+    unfold slot_types. destruct (lookup_N types (modfunc_type f)) as [[ps rs] |].
+    - apply in_or_app. right. exact Hx.
+    - exact Hx. }
+  unfold coalesce_func_with_types, coalesce_func.
+  split; [reflexivity | split].
+  { (* both local vectors are all-i32, hence both defaultable *)
+    cbn [modfunc_locals].
+    rewrite (default_vals_i32 _ Hi32).
+    rewrite (default_vals_i32 _ (Forall_firstn _ _ _ _ Hi32)).
+    split; intros Habs; discriminate Habs. }
   cbn [modfunc_type modfunc_locals modfunc_body].
   destruct (coalescable (func_param_count types (modfunc_type f))
                         (func_total_locals types f) (modfunc_body f)) eqn:Hc.
@@ -515,13 +708,30 @@ Proof.
               (func_total_locals types f) (modfunc_body f)).
     split.
     + exact (coalesce_func_with_types_related types f Hs Hc).
-    + intros inst vs defaults L Hlen Hd.
-      apply (frames_agree_entry types f vs defaults inst L Hs); [| exact Hd].
-      rewrite Hpc. rewrite Hlen. reflexivity.
-  - exists empty. rewrite (compute_phi_rejected _ _ _ _ Hc).
-    rewrite map_apply_phi_empty_id. split.
+    + intros inst vs defaults defaults_opt L Hlen Hd Hd'.
+      apply (frames_agree_entry types f vs defaults _ inst L
+               (func_param_count types (modfunc_type f))
+               (func_total_locals types f) _ Hs);
+        [ reflexivity | reflexivity | reflexivity
+        | rewrite Hpc; rewrite Hlen; reflexivity
+        | exact Hd | exact Hd' ].
+  - (* rejected: the bound degrades to n, so firstn keeps every local *)
+    assert (Hn : func_total_locals types f
+                 = (func_param_count types (modfunc_type f)
+                    + N.of_nat (length (modfunc_locals f)))%N)
+      by (unfold func_total_locals; lia).
+    assert (Hle : (func_param_count types (modfunc_type f)
+                   <= func_total_locals types f)%N) by lia.
+    exists empty. rewrite (compute_phi_rejected _ _ _ _ Hc).
+    rewrite map_apply_phi_empty_id.
+    rewrite (slot_bound_empty _ _ Hle).
+    replace (N.to_nat (func_total_locals types f
+                       - func_param_count types (modfunc_type f)))
+      with (length (modfunc_locals f)) by lia.
+    rewrite firstn_all. split.
     + apply rel_bs_refl. exact (func_supported_guarded types f Hs).
-    + intros inst vs defaults L Hlen Hd. apply frames_agree_empty_refl.
+    + intros inst vs defaults defaults_opt L Hlen Hd Hd'.
+      rewrite Hd in Hd'. injection Hd' as <-. apply frames_agree_empty_refl.
 Qed.
 
 (* A funcinst whose own body satisfies the nesting restriction is
@@ -538,10 +748,11 @@ Lemma funcinst_rel_refl : forall fi,
 Proof.
   intros fi Hg. destruct fi as [tf inst code | tf h]; [| reflexivity].
   destruct tf as [ts1 ts2]. exists code. split; [reflexivity |].
-  split; [reflexivity | split; [reflexivity |]].
+  split; [reflexivity | split; [ split; intros H; exact H |]].
   exists empty. split.
   - apply rel_bs_refl. exact (Hg _ _ _ eq_refl).
-  - intros inst' vs defaults L Hlen Hd. apply frames_agree_empty_refl.
+  - intros inst' vs defaults defaults_opt L Hlen Hd Hd'.
+    rewrite Hd in Hd'. injection Hd' as <-. apply frames_agree_empty_refl.
 Qed.
 
 Lemma store_guarded_self_rel : forall s,

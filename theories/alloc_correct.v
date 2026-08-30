@@ -1894,6 +1894,36 @@ Proof.
   - rewrite apply_phi_local_empty. exact Hlo.
 Qed.
 
+(* ── The two facts the truncation rests on ───────────────────────── *)
+
+(* Nothing the renamed body can name falls outside the kept slots.  Below
+   pc phi is the identity and pc is the floor of the bound; above it the
+   bound is a max over exactly that range.  This is what makes the
+   shortened local vector long enough -- for typing, where it is the
+   declared vector, and at a fresh activation, where it is the frame. *)
+Lemma compute_phi_below_bound : forall tys pc n body i,
+  (i < n)%N ->
+  (apply_phi_local (compute_phi tys pc n body) i
+     < slot_bound pc n (compute_phi tys pc n body))%N.
+Proof.
+  intros tys pc n body i Hi.
+  destruct (N.ltb i pc) eqn:E.
+  - apply N.ltb_lt in E. rewrite (compute_phi_id_below _ _ _ _ _ E).
+    pose proof (slot_bound_ge pc n (compute_phi tys pc n body)). lia.
+  - apply N.ltb_ge in E. apply slot_bound_hit; assumption.
+Qed.
+
+(* And the kept slots are no more than were declared, so the truncation
+   really is a truncation: [firstn] of it is a proper prefix of the
+   original local vector rather than the whole of it padded. *)
+Lemma compute_phi_bound_le : forall tys pc n t body,
+  tys_uniform tys pc n t -> (pc <= n)%N ->
+  (slot_bound pc n (compute_phi tys pc n body) <= n)%N.
+Proof.
+  intros tys pc n t body Huni Hpc. apply slot_bound_le; [exact Hpc |].
+  intros j _ Hj. exact (compute_phi_range tys pc n t body j Huni Hj).
+Qed.
+
 (* The slot vector is exactly as long as there are slots, in both arms of
    slot_types -- so a slot index in range always resolves. *)
 Lemma slot_types_length : forall types f,

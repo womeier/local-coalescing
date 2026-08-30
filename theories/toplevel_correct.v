@@ -730,7 +730,14 @@ Proof.
   { (* r_invoke_native: the case the whole exercise is for.  The source
        enters [code]; the optimized side enters the [code_opt] that
        funcinst_rel hands back, and the two activations are related at
-       the callee's own map by the two halves of code_rel. *)
+       the callee's own map by the two halves of code_rel.
+
+       [code_opt] declares fewer locals, so its activation is built from
+       its own, shorter, default vector -- which is why the entry half
+       of code_rel hands back that vector rather than reusing the
+       source's.  The label arity is [length ts2] and the argument
+       count [length ts1], neither of which the pass touches, so the
+       rest of the rule's premises are the hypotheses unchanged. *)
     subst ves. subst cl. subst code.
     apply rel_es_plain_inv in Hrel; [| solve [plain_solve] ]. subst es_o.
     pose proof (proj1 Hfr) as Hinst.
@@ -738,16 +745,21 @@ Proof.
     simpl in Hfi.
     destruct Hfi as [code_opt [Hcl_o [Hty [Hloc [psi [Hbs Hentry]]]]]].
     destruct code_opt as [xo tso eso]. cbn in Hty, Hloc, Hbs, Hentry.
-    subst xo. subst tso.
+    subst xo.
+    destruct (defaults_of_not_none tso
+                (fun Habs => ltac:(rewrite (proj2 Hloc Habs) in H7;
+                                   discriminate H7)))
+      as [defaults_o Hdo].
     exists (with_funcs s fs). eexists. eexists. split; [| split; [| split]].
     - eapply r_invoke_native;
         [ rewrite Hcl_o in Hlk; exact Hlk | reflexivity | reflexivity
-        | reflexivity | eassumption | eassumption | eassumption
-        | eassumption | eassumption ].
+        | reflexivity | eassumption | reflexivity | eassumption
+        | eassumption | exact Hdo ].
     - exact Hst.
     - apply rel_cons; [| apply rel_nil ].
       eapply rel_frame.
-      + apply (Hentry inst vs defaults _); [ congruence | exact H7 ].
+      + apply (Hentry inst vs defaults defaults_o _);
+          [ congruence | exact H7 | exact Hdo ].
       + apply rel_cons; [| apply rel_nil ].
         apply rel_label; [| apply rel_nil |].
         * apply label_ok_dead; [ reflexivity |].
@@ -1791,16 +1803,23 @@ Proof.
     destruct code_s as [xs tss ess].
     destruct Hcr as [Hty [Hloc [psi [Hbody Hentry]]]].
     cbn in Hty, Hloc, Hbody, Hentry.
-    subst xs. subst tss.
+    subst xs.
+    (* the optimized callee ran, so its locals are defaultable; code_rel
+       transfers that to the source's, which declares more of them *)
+    destruct (defaults_of_not_none tss
+                (fun Habs => ltac:(rewrite (proj1 Hloc Habs) in H7;
+                                   discriminate H7)))
+      as [defaults_s Hds].
     exists (with_funcs s fs). eexists. eexists. split; [| split; [| split]].
     - eapply r_invoke_native;
         [ exact Hlk | reflexivity | reflexivity | reflexivity
-        | eassumption | eassumption | eassumption | eassumption
-        | eassumption ].
+        | eassumption | reflexivity | eassumption | eassumption
+        | exact Hds ].
     - exact Hst.
     - apply rel_cons; [| apply rel_nil ].
       eapply rel_frame.
-      + apply (Hentry inst vs defaults _); [ congruence | assumption ].
+      + apply (Hentry inst vs defaults_s defaults _);
+          [ congruence | exact Hds | exact H7 ].
       + apply rel_cons; [| apply rel_nil ].
         apply rel_label; [| apply rel_nil |].
         * apply label_ok_dead; [ reflexivity |].
