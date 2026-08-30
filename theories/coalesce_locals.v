@@ -141,14 +141,95 @@ Fixpoint bs_guarded (bs : list basic_instruction) : bool :=
   | b :: rest => bi_guarded b && bs_guarded rest
   end.
 
+Definition bi_kills (i : N) (b : basic_instruction) : bool :=
+  match b with
+  | BI_local_set j => N.eqb i j
+  | BI_local_tee j => N.eqb i j
+  | _ => false
+  end.
+
+(* The list recursion is inlined as a local fix rather than written as a
+   mutual Fixpoint: Rocq's guard checker rejects mutual recursion that
+   alternates between a type and lists of it.  bi_live_block / _loop / _if
+   below recover the equations one would have written directly. *)
+Fixpoint bi_live (i : N) (b : basic_instruction) {struct b} : bool :=
+  let fix bsl (bs : list basic_instruction) : bool :=
+    match bs with
+    | [] => false
+    | b' :: rest => bi_live i b' || (negb (bi_kills i b') && bsl rest)
+    end in
+  match b with
+  | BI_local_get j => N.eqb i j
+  | BI_block _ bs => bsl bs
+  | BI_loop _ bs => bsl bs
+  | BI_if _ b1 b2 => bsl b1 || bsl b2
+  | _ => false
+  end.
+
+Fixpoint bs_live_b (i : N) (bs : list basic_instruction) : bool :=
+  match bs with
+  | [] => false
+  | b :: rest => bi_live i b || (negb (bi_kills i b) && bs_live_b i rest)
+  end.
+
+Lemma bi_live_block : forall i bt bs, bi_live i (BI_block bt bs) = bs_live_b i bs.
+Proof.
+  intros i bt bs. induction bs as [|b rest IH]; simpl; [reflexivity |].
+  simpl in IH. rewrite IH. reflexivity.
+Qed.
+
+Lemma bi_live_loop : forall i bt bs, bi_live i (BI_loop bt bs) = bs_live_b i bs.
+Proof.
+  intros i bt bs. induction bs as [|b rest IH]; simpl; [reflexivity |].
+  simpl in IH. rewrite IH. reflexivity.
+Qed.
+
+Lemma bi_live_if : forall i bt b1 b2,
+  bi_live i (BI_if bt b1 b2) = bs_live_b i b1 || bs_live_b i b2.
+Proof.
+  intros i bt b1 b2.
+  rewrite <- (bi_live_block i bt b1). rewrite <- (bi_live_block i bt b2).
+  reflexivity.
+Qed.
+
+Fixpoint bs_kills_b (i : N) (bs : list basic_instruction) : bool :=
+  match bs with
+  | [] => false
+  | b :: rest => bi_kills i b || bs_kills_b i rest
+  end.
+
+(* The continuation of a body, as the stack of instruction lists still to
+   run when it finishes -- innermost first.  Kept as a stack rather than
+   appended into one list so that pushing is a cons: the walk pushes one
+   per nesting level, and an append at every instruction would be
+   quadratic on a 47k-instruction function.
+
+   A local is live over the stack if some level reads it before a level
+   at or below kills it, which is [bs_live_ext] read one level at a
+   time. *)
+Fixpoint stack_live (i : N) (ls : list (list basic_instruction)) : bool :=
+  match ls with
+  | [] => false
+  | bs :: rest => bs_live_b i bs || (negb (bs_kills_b i bs) && stack_live i rest)
+  end.
+
 (* ── M1: forward interval-collection walk ──────────────────────── *)
 
 Record walk_state := mk_ws {
   ws_pos   : nat;
   ws_defs  : M.t nat;   (* localidx  ↦  def_pos      *)
   ws_uses  : M.t nat;   (* localidx  ↦  last_use_pos  *)
-  ws_ok    : bool       (* false once a guard trips    *)
+  ws_ok    : bool;      (* false once a guard trips    *)
+  ws_self  : list (list basic_instruction);
+                        (* the lists enclosing the body being walked,
+                           innermost first *)
+  ws_encl  : list basic_instruction
+                        (* the list the current instruction is in *)
 }.
+
+Definition ws_stacks (self : list (list basic_instruction))
+  (encl : list basic_instruction) (st : walk_state) : walk_state :=
+  mk_ws st.(ws_pos) st.(ws_defs) st.(ws_uses) st.(ws_ok) self encl.
 
 (* The walk carries the structured-control nesting `depth`, but only its
    zero-ness matters: it decides where a local's live interval *starts*.
@@ -156,43 +237,57 @@ Record walk_state := mk_ws {
    The interval model reads a range off source order -- from the first def
    to the last touch -- and that is faithful only when the def dominates
    every later touch and runs at most once.  At depth 0 both hold.  A def
-   under a block/loop/if has neither property: the branch may be skipped,
-   so a later read can see the zero-initialised slot instead, and a loop
-   re-runs the body, so a read textually *before* the write still observes
-   it across iterations.  Both are the same statement -- the slot must
-   already belong to this local on entry to the function -- so a guarded
-   def opens the interval at 0.  It then overlaps every interval that is
-   live anywhere before it, and the allocator gives it a slot no other
-   local can reuse ahead of it.
+   under a block/loop/if has neither property in general: the branch may
+   be skipped, so a later read can see the zero-initialised slot instead,
+   and a loop re-runs the body, so a read textually *before* the write
+   still observes it across iterations.
 
-   Rejecting guarded defs outright, as the walk used to, was sound but
-   threw away most of the opportunity: 559 of the 1673 `if` bodies in
-   examples/sha.wat contain a write.
+   Both failures are about reads the def does not reach.  If nothing
+   outside the body reads the local, neither can be observed: a skipped
+   def is a def of a local nobody goes on to read, and a re-entered body
+   redefines before it reads.  So a nested def opens at its own position
+   exactly when the local is dead outside the body, and at 0 otherwise --
+   where it overlaps everything live before it and the allocator gives it
+   a slot no one can reuse ahead of it.
 
-   A write is a *touch*: it extends the interval end exactly as a read
-   does.  That is what makes a second write harmless, and it is why the
-   second write no longer has to be rejected -- the danger there was an
-   interval closing at the last read while a later write still clobbered
-   the slot.
+   "Outside" has to mean outside in the *control* sense, not merely later
+   in the text.  A local written in one arm of an `if` and read in the
+   other is read on a path where the write never ran, so it is not dead
+   outside its arm.  That is why [ws_self] holds whole enclosing lists
+   rather than the parts of them still to run: [bi_live] descends into a
+   construct, so a read in a sibling arm is seen, and [bs_kills_b] only
+   shadows at the top level of a list, never inside a construct.  With
+   suffixes instead, this miscompiles:
 
-   Independently of the interval model, a body that both branches and
-   writes is refused outright: the branch can skip a kill the liveness
-   counted.  This is [body_ok_b], the same check the relation in
-   coalesce_locals_correct.v asks for at every nesting level. *)
+     (local i32 i32)  i32.const 42  local.set 1  local.get 1  drop
+     local.get 0  if (result i32)  i32.const 7  local.set 2  i32.const 0
+                  else  local.get 2  end
+
+   -- local 2 looks dead after arm 1, takes local 1's slot, and f(0)
+   returns 42 where it must return 0.  See examples/regression/arms.wat.
+
+   Nothing is lost by widening to the whole list: the two differ only on
+   a read *before* the construct, and a local whose first def is inside
+   the body can have no such read, because a read before any def sets
+   [ws_ok] false and the function is left alone. *)
 Fixpoint walk_instr
   (param_count n : N)
   (depth : nat)
   (st : walk_state)
   (i : basic_instruction) : walk_state :=
   let pos     := st.(ws_pos) in
-  let st_base := mk_ws (pos + 1) st.(ws_defs) st.(ws_uses) st.(ws_ok) in
-  let walk_list d st instrs :=
-    List.fold_left (fun a i => walk_instr param_count n d a i)
-                   instrs st in
+  let st_base := mk_ws (pos + 1) st.(ws_defs) st.(ws_uses) st.(ws_ok)
+                       st.(ws_self) st.(ws_encl) in
+  let walk_list d a instrs :=
+    List.fold_left (fun a' i' => walk_instr param_count n d a' i')
+                   instrs a in
   (* entering a body whose branches could skip its own writes: give up *)
-  let body_guard b st :=
-    if body_ok_b b then st
-    else mk_ws st.(ws_pos) st.(ws_defs) st.(ws_uses) false in
+  let body_guard b st' :=
+    if body_ok_b b then st'
+    else mk_ws st'.(ws_pos) st'.(ws_defs) st'.(ws_uses) false
+               st'.(ws_self) st'.(ws_encl) in
+  let enter b st' := ws_stacks (st.(ws_encl) :: st.(ws_self)) b st' in
+  let leave st'   := ws_stacks st.(ws_self) st.(ws_encl) st' in
   let def_instr idx :=
     if N.ltb idx param_count then st_base
     else if N.ltb idx n then
@@ -200,12 +295,14 @@ Fixpoint walk_instr
         match M.find idx st.(ws_defs) with
         | Some d => d                                (* keep the first def *)
         | None   => if Nat.eqb depth 0 then pos      (* dominating def     *)
-                    else 0                           (* guarded: from entry *)
+                    else if stack_live idx st.(ws_self) then 0
+                                                     (* read outside: entry *)
+                    else pos                         (* dead outside it     *)
         end in
       mk_ws (pos + 1)
             (M.add idx start st.(ws_defs))
             (M.add idx pos   st.(ws_uses))           (* a write is a touch  *)
-            st.(ws_ok)
+            st.(ws_ok) st.(ws_self) st.(ws_encl)
     else st_base in
   match i with
   | BI_local_get idx =>
@@ -214,18 +311,20 @@ Fixpoint walk_instr
       if M.mem idx st.(ws_defs) then                 (* use after def *)
         mk_ws (pos + 1) st.(ws_defs)
               (M.add idx pos st.(ws_uses)) st.(ws_ok)
+              st.(ws_self) st.(ws_encl)
       else                                           (* use before def *)
         mk_ws (pos + 1) st.(ws_defs) st.(ws_uses) false
+              st.(ws_self) st.(ws_encl)
     else st_base
 
   | BI_local_set idx => def_instr idx
   | BI_local_tee idx => def_instr idx
 
-  | BI_block _ b    => walk_list (S depth) (body_guard b st_base) b
-  | BI_loop _ b     => walk_list (S depth) (body_guard b st_base) b
+  | BI_block _ b    => leave (walk_list (S depth) (enter b (body_guard b st_base)) b)
+  | BI_loop _ b     => leave (walk_list (S depth) (enter b (body_guard b st_base)) b)
   | BI_if _ b1 b2   => let st0 := body_guard b2 (body_guard b1 st_base) in
-                       let st1 := walk_list (S depth) st0 b1 in
-                       walk_list (S depth) st1 b2
+                       let st1 := walk_list (S depth) (enter b1 st0) b1 in
+                       leave (walk_list (S depth) (enter b2 st1) b2)
   | _               => st_base
   end.
 
@@ -233,7 +332,7 @@ Definition walk_func
   (param_count n : N)
   (body : list basic_instruction) : walk_state :=
   List.fold_left (fun a i => walk_instr param_count n 0 a i)
-                 body     (mk_ws 0 (M.empty nat) (M.empty nat) true).
+                 body (mk_ws 0 (M.empty nat) (M.empty nat) true [] body).
 
 Definition coalescable
   (param_count n : N)

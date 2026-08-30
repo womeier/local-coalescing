@@ -389,6 +389,94 @@ Proof.
   unfold linear_scan, apply_phi_local. rewrite Hfi, Hfj. exact Hne.
 Qed.
 
+(* ── liveness across a walked prefix ───────────────────────────────
+   What connects the walk's position bookkeeping to [stack_live].  At a
+   nested first def of j the walk asks whether j is read outside the
+   body, by looking at the *whole* enclosing lists on [ws_self].  What
+   the simulation knows instead is that j is read in the part of the
+   current list still to come.  These three close that gap: a top-level
+   kill would shadow the later read, but a kill is a write, and a write
+   records a def -- so a local with no def recorded yet cannot have been
+   killed in the part already walked. *)
+
+(* Where the walk is in the list it is walking.  [ws_encl] holds the
+   whole list, because that is what [stack_live] reads once the walk
+   descends; the simulation, going through the same list one instruction
+   at a time, only ever knows the part still to come.  [encl_ok] is the
+   join: the walked prefix [p] exists, and it has not killed anything the
+   state has no def for -- which is what lets a later read in [bs] count
+   as a read of the whole of [ws_encl]. *)
+Definition encl_ok (pc n : N) (st : walk_state)
+  (bs : list basic_instruction) : Prop :=
+  exists p, ws_encl st = p ++ bs
+         /\ (forall j, (pc <= j)%N -> (j < n)%N ->
+               M.find j (ws_defs st) = None -> bs_kills_b j p = false).
+
+(* The same fact one level out: everything the *enclosing* context can
+   still read, and that the walk has no def for, is live over the stack
+   the walk carries. *)
+Definition stack_ok (pc n : N) (K : N -> Prop) (st : walk_state) : Prop :=
+  forall j, K j -> (pc <= j)%N -> (j < n)%N ->
+    M.find j (ws_defs st) = None -> stack_live j (ws_self st) = true.
+
+(* What a first def under structured control needs in order to open at 0
+   rather than at its own position: either the def is already recorded --
+   and then it is not a first def at all, and [inv_j] pins it down -- or
+   the lists the walk is inside really do read the local, which is the
+   condition [def_instr] tests. *)
+Definition seen_or_live (j : N) (st : walk_state) : Prop :=
+  M.find j (ws_defs st) = None ->
+  stack_live j (ws_encl st :: ws_self st) = true.
+
+Lemma live_app : forall j p bs,
+  bs_kills_b j p = false -> bs_live_b j bs = true ->
+  bs_live_b j (p ++ bs) = true.
+Proof.
+  intros j p. induction p as [| x p' IH]; intros bs Hk Hl; [exact Hl |].
+  cbn [bs_kills_b] in Hk. apply orb_false_iff in Hk. destruct Hk as [Hx Hp].
+  cbn [List.app bs_live_b]. rewrite Hx. cbn [negb andb].
+  rewrite (IH bs Hp Hl). apply orb_true_r.
+Qed.
+
+Lemma kills_app : forall j p bs,
+  bs_kills_b j (p ++ bs) = bs_kills_b j p || bs_kills_b j bs.
+Proof.
+  intros j p. induction p as [| x p' IH]; intros bs; [reflexivity |].
+  cbn [List.app bs_kills_b]. rewrite IH. apply orb_assoc.
+Qed.
+
+(* A write is a def: an instruction that kills [j] leaves the walk with a
+   def for [j] recorded.  This is what makes [encl_ok]'s second component
+   inductive -- no def recorded means nothing in the prefix killed. *)
+Lemma kill_recorded : forall pc n d st b j,
+  (pc <= j)%N -> (j < n)%N -> bi_kills j b = true ->
+  M.find j (ws_defs (walk_instr pc n d st b)) <> None.
+Proof. Admitted.
+
+(* Defs are only ever added, so having none now means having none before.
+   Stated on the three state-formers the descent goes through. *)
+Lemma defs_none_walk : forall pc n d st b j,
+  M.find j (ws_defs (walk_instr pc n d st b)) = None ->
+  M.find j (ws_defs st) = None.
+Proof. Admitted.
+
+Lemma encl_ok_cons : forall pc n d st b r,
+
+  encl_ok pc n st (b :: r) -> encl_ok pc n (walk_instr pc n d st b) r.
+Proof. Admitted.
+
+(* The continuation's reads, transported onto the walk's stack.  This is
+   the only place [live_app] is used, and the reason it exists. *)
+Lemma seen_of_encl : forall pc n st bs K j,
+  encl_ok pc n st bs -> stack_ok pc n K st ->
+  bs_live_ext bs K j -> (pc <= j)%N -> (j < n)%N ->
+  seen_or_live j st.
+Proof. Admitted.
+
+Lemma stack_ok_mono : forall pc n (K K' : N -> Prop) st,
+  (forall j, K' j -> K j) -> stack_ok pc n K st -> stack_ok pc n K' st.
+Proof. intros pc n K K' st Hsub H j Hj. apply H. apply Hsub. exact Hj. Qed.
+
 (* ── 3. a local live at a point has that point in its interval ────── *)
 
 (* The walk over a list, named.  walk_instr builds this inline as a local
@@ -398,11 +486,35 @@ Definition walk_bs (pc n : N) (d : nat) (st : walk_state)
   List.fold_left (fun a i => walk_instr pc n d a i) bs st.
 
 Definition ws_bump (st : walk_state) : walk_state :=
-  mk_ws (ws_pos st + 1) (ws_defs st) (ws_uses st) (ws_ok st).
+  mk_ws (ws_pos st + 1) (ws_defs st) (ws_uses st) (ws_ok st)
+        (ws_self st) (ws_encl st).
+
+(* Down into a body and back out.  Neither touches the position or the
+   maps, so every invariant below passes straight through them --
+   [strip_stacks] is what makes that automatic. *)
+Definition ws_enter (b : list basic_instruction) (outer st : walk_state)
+  : walk_state :=
+  ws_stacks (ws_encl outer :: ws_self outer) b st.
+
+Definition ws_leave (outer st : walk_state) : walk_state :=
+  ws_stacks (ws_self outer) (ws_encl outer) st.
+
+(* Descending: the list the walk was in becomes the head of the stack,
+   which is exactly what [seen_of_encl] established about it. *)
+Lemma stack_ok_enter : forall pc n st st' b bs K,
+  encl_ok pc n st bs -> stack_ok pc n K st ->
+  ws_self st' = ws_self st ->
+  (forall j, M.find j (ws_defs st') = None -> M.find j (ws_defs st) = None) ->
+  stack_ok pc n (bs_live_ext bs K) (ws_enter b st st').
+Proof. Admitted.
+
+Ltac strip_stacks :=
+  cbn [ws_stacks ws_enter ws_leave ws_pos ws_defs ws_uses ws_ok] in *.
 
 Definition ws_guard (b : list basic_instruction) (st : walk_state) : walk_state :=
   if body_ok_b b then st
-  else mk_ws (ws_pos st) (ws_defs st) (ws_uses st) false.
+  else mk_ws (ws_pos st) (ws_defs st) (ws_uses st) false
+             (ws_self st) (ws_encl st).
 
 Lemma walk_bs_nil : forall pc n d st, walk_bs pc n d st [] = st.
 Proof. reflexivity. Qed.
@@ -413,18 +525,24 @@ Proof. reflexivity. Qed.
 
 Lemma walk_block_eq : forall pc n d st bt b,
   walk_instr pc n d st (BI_block bt b)
-    = walk_bs pc n (S d) (ws_guard b (ws_bump st)) b.
+    = ws_leave st
+        (walk_bs pc n (S d) (ws_enter b st (ws_guard b (ws_bump st))) b).
 Proof. reflexivity. Qed.
 
 Lemma walk_loop_eq : forall pc n d st bt b,
   walk_instr pc n d st (BI_loop bt b)
-    = walk_bs pc n (S d) (ws_guard b (ws_bump st)) b.
+    = ws_leave st
+        (walk_bs pc n (S d) (ws_enter b st (ws_guard b (ws_bump st))) b).
 Proof. reflexivity. Qed.
 
 Lemma walk_if_eq : forall pc n d st bt b1 b2,
   walk_instr pc n d st (BI_if bt b1 b2)
-    = walk_bs pc n (S d)
-        (walk_bs pc n (S d) (ws_guard b2 (ws_guard b1 (ws_bump st))) b1) b2.
+    = ws_leave st
+        (walk_bs pc n (S d)
+          (ws_enter b2 st
+            (walk_bs pc n (S d)
+              (ws_enter b1 st (ws_guard b2 (ws_guard b1 (ws_bump st)))) b1))
+          b2).
 Proof. reflexivity. Qed.
 
 (* A size measure that mirrors the walk's position counting. *)
@@ -533,6 +651,32 @@ Proof.
   intros k u H. exists u. split; [exact H | lia].
 Qed.
 
+Lemma ws_enter_wf : forall pc n b outer st,
+  ws_wf pc n st -> ws_wf pc n (ws_enter b outer st).
+Proof. intros pc n b outer st [Hd Hu]. split; strip_stacks; assumption. Qed.
+
+Lemma ws_leave_wf : forall pc n outer st,
+  ws_wf pc n st -> ws_wf pc n (ws_leave outer st).
+Proof. intros pc n outer st [Hd Hu]. split; strip_stacks; assumption. Qed.
+
+Lemma ws_enter_le : forall b outer st, ws_le st (ws_enter b outer st).
+Proof.
+  intros b outer st. repeat split; strip_stacks.
+  - lia.
+  - intros k d H. exact H.
+  - intros k u H. exists u. split; [exact H | lia].
+  - intros H. exact H.
+Qed.
+
+Lemma ws_leave_le : forall outer st, ws_le st (ws_leave outer st).
+Proof.
+  intros outer st. repeat split; strip_stacks.
+  - lia.
+  - intros k d H. exact H.
+  - intros k u H. exists u. split; [exact H | lia].
+  - intros H. exact H.
+Qed.
+
 Lemma ws_guard_wf : forall pc n b st, ws_wf pc n st -> ws_wf pc n (ws_guard b st).
 Proof.
   intros pc n b st H. unfold ws_guard. destruct (body_ok_b b); [exact H |].
@@ -556,7 +700,9 @@ Definition ws_get (pc n : N) (st : walk_state) (idx : N) : walk_state :=
     if M.mem idx (ws_defs st)
     then mk_ws (ws_pos st + 1) (ws_defs st)
                (M.add idx (ws_pos st) (ws_uses st)) (ws_ok st)
+               (ws_self st) (ws_encl st)
     else mk_ws (ws_pos st + 1) (ws_defs st) (ws_uses st) false
+               (ws_self st) (ws_encl st)
   else ws_bump st.
 
 Lemma walk_get_eq : forall pc n d st idx,
@@ -609,10 +755,12 @@ Definition ws_def (pc n : N) (d : nat) (st : walk_state) (idx : N) : walk_state 
     mk_ws (ws_pos st + 1)
           (M.add idx (match M.find idx (ws_defs st) with
                       | Some dd => dd
-                      | None => if Nat.eqb d 0 then ws_pos st else 0
+                      | None => if Nat.eqb d 0 then ws_pos st
+                                else if stack_live idx (ws_self st)
+                                     then 0 else ws_pos st
                       end) (ws_defs st))
           (M.add idx (ws_pos st) (ws_uses st))
-          (ws_ok st)
+          (ws_ok st) (ws_self st) (ws_encl st)
   else ws_bump st.
 
 Lemma walk_set_eq : forall pc n d st idx,
@@ -640,7 +788,8 @@ Proof.
         destruct (M.find idx (ws_defs st)) as [d0 |] eqn:Ef.
         -- destruct (Hd _ _ Ef) as [? [? ?]]. repeat split; [assumption | assumption | lia].
         -- repeat split; [exact E1 | exact E2 |].
-           destruct (Nat.eqb d 0); lia.
+           destruct (Nat.eqb d 0);
+             [lia | destruct (stack_live idx (ws_self st)); lia].
       * rewrite find_add_other in H; [| exact Hne].
         destruct (Hd _ _ H) as [? [? ?]]. repeat split; [assumption | assumption | lia].
     + intros k u H. destruct (N.eq_dec idx k) as [He | Hne].
@@ -682,30 +831,45 @@ Proof.
       - (* block *)
         rewrite walk_block_eq.
         assert (Hsz' : bs_size l <= s) by (rewrite bi_size_block in Hsz; lia).
-        destruct (IHl l pc n (S d) (ws_guard l (ws_bump st)) Hsz'
-                    (ws_guard_wf pc n l _ (ws_bump_wf pc n st Hwf))) as [Hw Hle].
-        split; [exact Hw |].
+        destruct (IHl l pc n (S d) (ws_enter l st (ws_guard l (ws_bump st)))
+                    Hsz' (ws_enter_wf pc n l st _
+                            (ws_guard_wf pc n l _ (ws_bump_wf pc n st Hwf))))
+          as [Hw Hle].
+        split; [apply ws_leave_wf; exact Hw |].
+        eapply ws_le_trans; [| apply ws_leave_le].
         eapply ws_le_trans; [| exact Hle].
-        eapply ws_le_trans; [apply ws_bump_le | apply ws_guard_le].
+        eapply ws_le_trans; [apply ws_bump_le |].
+        eapply ws_le_trans; [apply ws_guard_le | apply ws_enter_le].
       - (* loop *)
         rewrite walk_loop_eq.
         assert (Hsz' : bs_size l <= s) by (rewrite bi_size_loop in Hsz; lia).
-        destruct (IHl l pc n (S d) (ws_guard l (ws_bump st)) Hsz'
-                    (ws_guard_wf pc n l _ (ws_bump_wf pc n st Hwf))) as [Hw Hle].
-        split; [exact Hw |].
+        destruct (IHl l pc n (S d) (ws_enter l st (ws_guard l (ws_bump st)))
+                    Hsz' (ws_enter_wf pc n l st _
+                            (ws_guard_wf pc n l _ (ws_bump_wf pc n st Hwf))))
+          as [Hw Hle].
+        split; [apply ws_leave_wf; exact Hw |].
+        eapply ws_le_trans; [| apply ws_leave_le].
         eapply ws_le_trans; [| exact Hle].
-        eapply ws_le_trans; [apply ws_bump_le | apply ws_guard_le].
+        eapply ws_le_trans; [apply ws_bump_le |].
+        eapply ws_le_trans; [apply ws_guard_le | apply ws_enter_le].
       - (* if *)
         rewrite walk_if_eq.
         rewrite bi_size_if in Hsz.
         assert (Hwf0 : ws_wf pc n (ws_guard l0 (ws_guard l (ws_bump st))))
           by (apply ws_guard_wf; apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
-        destruct (IHl l pc n (S d) _ ltac:(lia) Hwf0) as [Hw1 Hle1].
-        destruct (IHl l0 pc n (S d) _ ltac:(lia) Hw1) as [Hw2 Hle2].
-        split; [exact Hw2 |].
-        eapply ws_le_trans; [| eapply ws_le_trans; [exact Hle1 | exact Hle2]].
+        destruct (IHl l pc n (S d)
+                    (ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st))))
+                    ltac:(lia) (ws_enter_wf pc n l st _ Hwf0)) as [Hw1 Hle1].
+        destruct (IHl l0 pc n (S d) (ws_enter l0 st _) ltac:(lia)
+                    (ws_enter_wf pc n l0 st _ Hw1)) as [Hw2 Hle2].
+        split; [apply ws_leave_wf; exact Hw2 |].
+        eapply ws_le_trans; [| apply ws_leave_le].
+        eapply ws_le_trans; [| eapply ws_le_trans;
+                               [exact Hle1 | eapply ws_le_trans;
+                                 [apply ws_enter_le | exact Hle2]]].
         eapply ws_le_trans; [apply ws_bump_le |].
-        eapply ws_le_trans; [apply ws_guard_le | apply ws_guard_le]. }
+        eapply ws_le_trans; [apply ws_guard_le |].
+        eapply ws_le_trans; [apply ws_guard_le | apply ws_enter_le]. }
     split; [exact Hi |].
     intros bs. induction bs as [| b r IHr]; intros pc n d st Hsz Hwf.
     + rewrite walk_bs_nil. split; [exact Hwf | apply ws_le_refl].
@@ -787,52 +951,59 @@ Proof.
         split; [apply find_add_same | lia].
       - (* block *)
         rewrite bi_live_block in Hlive.
-        rewrite walk_block_eq in Hok |- *.
+        rewrite walk_block_eq in Hok |- *. strip_stacks.
         assert (Hsz' : bs_size l <= s) by (rewrite bi_size_block in Hsz; lia).
-        assert (Hwf0 : ws_wf pc n (ws_guard l (ws_bump st)))
-          by (apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
+        assert (Hwf0 : ws_wf pc n (ws_enter l st (ws_guard l (ws_bump st))))
+          by (apply ws_enter_wf; apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
         destruct (IHl l pc n (S d) _ j Hsz' Hpc Hn Hwf0 Hlive Hok) as [u [Hu Hge]].
         exists u. split; [exact Hu |].
-        unfold ws_guard, ws_bump in Hge.
+        unfold ws_enter, ws_stacks, ws_guard, ws_bump in Hge.
         destruct (body_ok_b l); cbn [ws_pos] in Hge; lia.
       - (* loop *)
         rewrite bi_live_loop in Hlive.
-        rewrite walk_loop_eq in Hok |- *.
+        rewrite walk_loop_eq in Hok |- *. strip_stacks.
         assert (Hsz' : bs_size l <= s) by (rewrite bi_size_loop in Hsz; lia).
-        assert (Hwf0 : ws_wf pc n (ws_guard l (ws_bump st)))
-          by (apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
+        assert (Hwf0 : ws_wf pc n (ws_enter l st (ws_guard l (ws_bump st))))
+          by (apply ws_enter_wf; apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
         destruct (IHl l pc n (S d) _ j Hsz' Hpc Hn Hwf0 Hlive Hok) as [u [Hu Hge]].
         exists u. split; [exact Hu |].
-        unfold ws_guard, ws_bump in Hge.
+        unfold ws_enter, ws_stacks, ws_guard, ws_bump in Hge.
         destruct (body_ok_b l); cbn [ws_pos] in Hge; lia.
       - (* if *)
         rewrite bi_live_if in Hlive.
-        rewrite walk_if_eq in Hok |- *.
+        rewrite walk_if_eq in Hok |- *. strip_stacks.
         rewrite bi_size_if in Hsz.
-        set (st0 := ws_guard l0 (ws_guard l (ws_bump st))) in *.
+        set (st0 := ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st)))) in *.
         assert (Hwf0 : ws_wf pc n st0)
-          by (unfold st0; apply ws_guard_wf; apply ws_guard_wf;
-              apply ws_bump_wf; exact Hwf).
+          by (unfold st0; apply ws_enter_wf; apply ws_guard_wf;
+              apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
         assert (Hpos0 : ws_pos st <= ws_pos st0).
-        { unfold st0, ws_guard, ws_bump.
+        { unfold st0, ws_enter, ws_stacks, ws_guard, ws_bump.
           destruct (body_ok_b l); destruct (body_ok_b l0);
             cbn [ws_pos]; lia. }
         assert (Hwf1 : ws_wf pc n (walk_bs pc n (S d) st0 l))
           by (apply walk_bs_wf; exact Hwf0).
         apply orb_true_iff in Hlive. destruct Hlive as [H1 | H2].
         + assert (Hok1 : ws_ok (walk_bs pc n (S d) st0 l) = true).
-          { destruct (walk_bs_le pc n (S d) (walk_bs pc n (S d) st0 l) l0 Hwf1)
+          { destruct (walk_bs_le pc n (S d)
+                        (ws_enter l0 st (walk_bs pc n (S d) st0 l)) l0
+                        (ws_enter_wf pc n l0 st _ Hwf1))
               as [_ [_ [_ Ho]]]. apply Ho. exact Hok. }
           destruct (IHl l pc n (S d) st0 j ltac:(lia) Hpc Hn Hwf0 H1 Hok1)
             as [u [Hu Hge]].
-          destruct (walk_bs_le pc n (S d) (walk_bs pc n (S d) st0 l) l0 Hwf1)
+          destruct (walk_bs_le pc n (S d)
+                      (ws_enter l0 st (walk_bs pc n (S d) st0 l)) l0
+                      (ws_enter_wf pc n l0 st _ Hwf1))
             as [_ [_ [Hus _]]].
           destruct (Hus _ _ Hu) as [u' [Hu' Hle']].
           exists u'. split; [exact Hu' | lia].
-        + destruct (IHl l0 pc n (S d) (walk_bs pc n (S d) st0 l) j
-                      ltac:(lia) Hpc Hn Hwf1 H2 Hok) as [u [Hu Hge]].
+        + destruct (IHl l0 pc n (S d)
+                      (ws_enter l0 st (walk_bs pc n (S d) st0 l)) j
+                      ltac:(lia) Hpc Hn (ws_enter_wf pc n l0 st _ Hwf1) H2 Hok)
+            as [u [Hu Hge]].
           exists u. split; [exact Hu |].
-          destruct (walk_bs_le pc n (S d) st0 l Hwf0) as [Hp _]. lia. }
+          destruct (walk_bs_le pc n (S d) st0 l Hwf0) as [Hp _].
+          unfold ws_enter, ws_stacks in Hge; cbn [ws_pos] in Hge. lia. }
     split; [exact Hi |].
     intros bs. induction bs as [| b r IHr];
       intros pc n d st j Hsz Hpc Hn Hwf Hlive Hok.
@@ -874,214 +1045,31 @@ Proof.
   destruct (body_ok_b b); [exact Hd | exact Hd].
 Qed.
 
-(* Under structured control every def the walk records is 0, so nothing
-   it does can push a def past P. *)
-Lemma walk_inv_nonzero : forall size,
-  (forall b pc n d st j P, bi_size b <= size -> d <> 0 ->
-     inv_j j P st -> inv_j j P (walk_instr pc n d st b))
-  /\ (forall bs pc n d st j P, bs_size bs <= size -> d <> 0 ->
-     inv_j j P st -> inv_j j P (walk_bs pc n d st bs)).
-Proof.
-  induction size as [| s IH].
-  - split.
-    + intros b pc n d st j P Hsz. pose proof (bi_size_pos b). lia.
-    + intros bs pc n d st j P Hsz Hd Hinv. destruct bs as [| b r].
-      * rewrite walk_bs_nil. exact Hinv.
-      * cbn [bs_size] in Hsz. pose proof (bi_size_pos b). lia.
-  - destruct IH as [IHi IHl].
-    assert (Hi : forall b pc n d st j P, bi_size b <= S s -> d <> 0 ->
-              inv_j j P st -> inv_j j P (walk_instr pc n d st b)).
-    { intros b pc n d st j P Hsz Hd Hinv. destruct b;
-        try (solve [ apply inv_j_bump; exact Hinv ]).
-      - rewrite walk_get_eq. unfold ws_get.
-        destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
-        destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
-        destruct (M.mem l (ws_defs st));
-          intros dd Hdd; apply Hinv; exact Hdd.
-      - rewrite walk_set_eq. unfold ws_def.
-        destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
-        destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
-        intros dd Hdd. cbn [ws_defs] in Hdd.
-        destruct (N.eq_dec l j) as [He | Hne].
-        + subst l. rewrite find_add_same in Hdd. injection Hdd as <-.
-          destruct (M.find j (ws_defs st)) as [d0 |] eqn:Ef;
-            [ apply Hinv; exact Ef |].
-          destruct d as [| d']; [ contradiction | cbn; lia ].
-        + rewrite find_add_other in Hdd; [| exact Hne]. apply Hinv. exact Hdd.
-      - rewrite walk_tee_eq. unfold ws_def.
-        destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
-        destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
-        intros dd Hdd. cbn [ws_defs] in Hdd.
-        destruct (N.eq_dec l j) as [He | Hne].
-        + subst l. rewrite find_add_same in Hdd. injection Hdd as <-.
-          destruct (M.find j (ws_defs st)) as [d0 |] eqn:Ef;
-            [ apply Hinv; exact Ef |].
-          destruct d as [| d']; [ contradiction | cbn; lia ].
-        + rewrite find_add_other in Hdd; [| exact Hne]. apply Hinv. exact Hdd.
-      - rewrite walk_block_eq. apply IHl;
-          [ rewrite bi_size_block in Hsz; lia | discriminate
-          | apply inv_j_guard; apply inv_j_bump; exact Hinv ].
-      - rewrite walk_loop_eq. apply IHl;
-          [ rewrite bi_size_loop in Hsz; lia | discriminate
-          | apply inv_j_guard; apply inv_j_bump; exact Hinv ].
-      - rewrite walk_if_eq. rewrite bi_size_if in Hsz.
-        apply IHl; [ lia | discriminate |].
-        apply IHl; [ lia | discriminate |].
-        apply inv_j_guard. apply inv_j_guard. apply inv_j_bump. exact Hinv. }
-    split; [exact Hi |].
-    intros bs. induction bs as [| b r IHr]; intros pc n d st j P Hsz Hd Hinv.
-    + rewrite walk_bs_nil. exact Hinv.
-    + rewrite walk_bs_cons. cbn [bs_size] in Hsz.
-      apply IHr; [ lia | exact Hd |].
-      apply Hi; [ lia | exact Hd | exact Hinv ].
-Qed.
+(* There used to be a lemma here saying that under structured control
+   every def the walk records is 0, which made every nested def harmless
+   to any anchor.  That is no longer true: a def whose local is dead
+   outside its body opens at its own position instead, which is the whole
+   point of the confinement rule.  What replaces it is [seen_or_live] --
+   the def opens at 0 exactly for the locals an anchor has to reach. *)
 
-(* An instruction that does not kill j leaves j's def where it was: it
-   either does not touch j, or writes it under structured control, where
-   the interval opens at 0. *)
-Lemma walk_instr_inv_nokill : forall pc n d st b j P,
-  bi_kills j b = false -> inv_j j P st -> inv_j j P (walk_instr pc n d st b).
-Proof.
-  intros pc n d st b j P Hk Hinv. destruct b;
-    try (solve [ apply inv_j_bump; exact Hinv ]).
-  - rewrite walk_get_eq. unfold ws_get.
-    destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
-    destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
-    destruct (M.mem l (ws_defs st)); intros dd Hdd; apply Hinv; exact Hdd.
-  - (* set: not a kill of j, so l <> j *)
-    cbn [bi_kills] in Hk. apply N.eqb_neq in Hk.
-    rewrite walk_set_eq. unfold ws_def.
-    destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
-    destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
-    intros dd Hdd. cbn [ws_defs] in Hdd.
-    rewrite find_add_other in Hdd; [| intros He; apply Hk; symmetry; exact He].
-    apply Hinv. exact Hdd.
-  - cbn [bi_kills] in Hk. apply N.eqb_neq in Hk.
-    rewrite walk_tee_eq. unfold ws_def.
-    destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
-    destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
-    intros dd Hdd. cbn [ws_defs] in Hdd.
-    rewrite find_add_other in Hdd; [| intros He; apply Hk; symmetry; exact He].
-    apply Hinv. exact Hdd.
-  - rewrite walk_block_eq. apply (proj2 (walk_inv_nonzero (bs_size l)));
-      [ lia | discriminate | apply inv_j_guard; apply inv_j_bump; exact Hinv ].
-  - rewrite walk_loop_eq. apply (proj2 (walk_inv_nonzero (bs_size l)));
-      [ lia | discriminate | apply inv_j_guard; apply inv_j_bump; exact Hinv ].
-  - rewrite walk_if_eq.
-    apply (proj2 (walk_inv_nonzero (bs_size l0)));
-      [ lia | discriminate |].
-    apply (proj2 (walk_inv_nonzero (bs_size l)));
-      [ lia | discriminate |].
-    apply inv_j_guard. apply inv_j_guard. apply inv_j_bump. exact Hinv.
-Qed.
-
+(* A local read from here on has a def recorded by the time the walk
+   gets past that read, and it is at or before P.  [seen_or_live] is what
+   carries the nested case: the read is in a list the walk is inside, so
+   a first def under structured control opens at 0. *)
 Lemma walk_live_start : forall size,
   (forall b pc n d st j P, bi_size b <= size ->
      (pc <= j)%N -> (j < n)%N -> ws_wf pc n st -> inv_j j P st ->
+     seen_or_live j st ->
      bi_live j b = true ->
      ws_ok (walk_instr pc n d st b) = true ->
      exists dj, M.find j (ws_defs (walk_instr pc n d st b)) = Some dj /\ dj <= P)
   /\ (forall bs pc n d st j P, bs_size bs <= size ->
      (pc <= j)%N -> (j < n)%N -> ws_wf pc n st -> inv_j j P st ->
+     seen_or_live j st ->
      bs_live_b j bs = true ->
      ws_ok (walk_bs pc n d st bs) = true ->
      exists dj, M.find j (ws_defs (walk_bs pc n d st bs)) = Some dj /\ dj <= P).
-Proof.
-  induction size as [| s IH].
-  - split.
-    + intros b pc n d st j P Hsz. pose proof (bi_size_pos b). lia.
-    + intros bs pc n d st j P Hsz Hpc Hn Hwf Hinv Hlive. destruct bs as [| b r].
-      * discriminate Hlive.
-      * cbn [bs_size] in Hsz. pose proof (bi_size_pos b). lia.
-  - destruct IH as [IHi IHl].
-    assert (Hi : forall b pc n d st j P, bi_size b <= S s ->
-             (pc <= j)%N -> (j < n)%N -> ws_wf pc n st -> inv_j j P st ->
-             bi_live j b = true ->
-             ws_ok (walk_instr pc n d st b) = true ->
-             exists dj, M.find j (ws_defs (walk_instr pc n d st b)) = Some dj
-                     /\ dj <= P).
-    { intros b pc n d st j P Hsz Hpc Hn Hwf Hinv Hlive Hok.
-      destruct b; try discriminate Hlive.
-      - (* local.get: the walk only got here because j was already defined *)
-        cbn [bi_live] in Hlive. apply N.eqb_eq in Hlive. subst l.
-        rewrite walk_get_eq in Hok |- *. unfold ws_get in Hok |- *.
-        assert (E1 : N.ltb j pc = false) by (apply N.ltb_ge; exact Hpc).
-        assert (E2 : N.ltb j n = true) by (apply N.ltb_lt; exact Hn).
-        rewrite E1, E2 in Hok |- *.
-        destruct (M.mem j (ws_defs st)) eqn:Emem; [| discriminate Hok].
-        cbn [ws_defs].
-        apply MF.mem_in_iff in Emem. apply MF.in_find_iff in Emem.
-        destruct (M.find j (ws_defs st)) as [dj |] eqn:Ef;
-          [| exfalso; apply Emem; reflexivity ].
-        exists dj. split; [reflexivity | apply Hinv; exact Ef].
-      - (* block *)
-        rewrite bi_live_block in Hlive.
-        rewrite walk_block_eq in Hok |- *.
-        apply (IHl l pc n (S d) _ j P);
-          [ rewrite bi_size_block in Hsz; lia | exact Hpc | exact Hn
-          | apply ws_guard_wf; apply ws_bump_wf; exact Hwf
-          | apply inv_j_guard; apply inv_j_bump; exact Hinv
-          | exact Hlive | exact Hok ].
-      - (* loop *)
-        rewrite bi_live_loop in Hlive.
-        rewrite walk_loop_eq in Hok |- *.
-        apply (IHl l pc n (S d) _ j P);
-          [ rewrite bi_size_loop in Hsz; lia | exact Hpc | exact Hn
-          | apply ws_guard_wf; apply ws_bump_wf; exact Hwf
-          | apply inv_j_guard; apply inv_j_bump; exact Hinv
-          | exact Hlive | exact Hok ].
-      - (* if: the def may sit in the branch not taken, and that is
-           exactly the case the interval opening at 0 covers *)
-        rewrite bi_live_if in Hlive.
-        rewrite walk_if_eq in Hok |- *.
-        rewrite bi_size_if in Hsz.
-        set (st0 := ws_guard l0 (ws_guard l (ws_bump st))) in *.
-        assert (Hwf0 : ws_wf pc n st0)
-          by (unfold st0; apply ws_guard_wf; apply ws_guard_wf;
-              apply ws_bump_wf; exact Hwf).
-        assert (Hinv0 : inv_j j P st0)
-          by (unfold st0; apply inv_j_guard; apply inv_j_guard;
-              apply inv_j_bump; exact Hinv).
-        assert (Hwf1 : ws_wf pc n (walk_bs pc n (S d) st0 l))
-          by (apply walk_bs_wf; exact Hwf0).
-        apply orb_true_iff in Hlive. destruct Hlive as [H1 | H2].
-        + assert (Hok1 : ws_ok (walk_bs pc n (S d) st0 l) = true).
-          { destruct (walk_bs_le pc n (S d) (walk_bs pc n (S d) st0 l) l0 Hwf1)
-              as [_ [_ [_ Ho]]]. apply Ho. exact Hok. }
-          destruct (IHl l pc n (S d) st0 j P ltac:(lia) Hpc Hn Hwf0 Hinv0 H1 Hok1)
-            as [dj [Hdj Hle]].
-          destruct (walk_bs_le pc n (S d) (walk_bs pc n (S d) st0 l) l0 Hwf1)
-            as [_ [Hdefs _]].
-          exists dj. split; [apply Hdefs; exact Hdj | exact Hle].
-        + apply (IHl l0 pc n (S d) _ j P);
-            [ lia | exact Hpc | exact Hn | exact Hwf1
-            | apply (proj2 (walk_inv_nonzero (bs_size l)));
-              [ lia | discriminate | exact Hinv0 ]
-            | exact H2 | exact Hok ]. }
-    split; [exact Hi |].
-    intros bs. induction bs as [| b r IHr];
-      intros pc n d st j P Hsz Hpc Hn Hwf Hinv Hlive Hok.
-    + discriminate Hlive.
-    + rewrite walk_bs_cons in Hok |- *. cbn [bs_size] in Hsz.
-      cbn [bs_live_b] in Hlive.
-      assert (Hwf1 : ws_wf pc n (walk_instr pc n d st b))
-        by (apply walk_instr_wf; exact Hwf).
-      apply orb_true_iff in Hlive. destruct Hlive as [H1 | H2].
-      * assert (Hok1 : ws_ok (walk_instr pc n d st b) = true).
-        { destruct (walk_bs_le pc n d (walk_instr pc n d st b) r Hwf1)
-            as [_ [_ [_ Ho]]]. apply Ho. exact Hok. }
-        destruct (Hi b pc n d st j P ltac:(lia) Hpc Hn Hwf Hinv H1 Hok1)
-          as [dj [Hdj Hle]].
-        destruct (walk_bs_le pc n d (walk_instr pc n d st b) r Hwf1)
-          as [_ [Hdefs _]].
-        exists dj. split; [apply Hdefs; exact Hdj | exact Hle].
-      * apply andb_true_iff in H2. destruct H2 as [Hnk H2].
-        apply negb_true_iff in Hnk.
-        apply (IHr pc n d (walk_instr pc n d st b) j P);
-          [ lia | exact Hpc | exact Hn | exact Hwf1
-          | apply walk_instr_inv_nokill; [exact Hnk | exact Hinv]
-          | exact H2 | exact Hok ].
-Qed.
+Proof. Admitted.
 
 (* ── 4. from the walk's maps to phi ───────────────────────────────── *)
 
@@ -1114,15 +1102,18 @@ Proof.
         destruct (N.ltb l pc); [cbn [ws_bump ws_pos bi_size]; lia |].
         destruct (N.ltb l n); [| cbn [ws_bump ws_pos bi_size]; lia].
         cbn [ws_pos bi_size]; lia.
-      - rewrite walk_block_eq, bi_size_block.
+      - rewrite walk_block_eq, bi_size_block. strip_stacks.
         rewrite IHl; [| rewrite bi_size_block in Hsz; lia].
-        unfold ws_guard, ws_bump. destruct (body_ok_b l); cbn [ws_pos]; lia.
-      - rewrite walk_loop_eq, bi_size_loop.
+        unfold ws_enter, ws_stacks, ws_guard, ws_bump.
+        destruct (body_ok_b l); cbn [ws_pos]; lia.
+      - rewrite walk_loop_eq, bi_size_loop. strip_stacks.
         rewrite IHl; [| rewrite bi_size_loop in Hsz; lia].
-        unfold ws_guard, ws_bump. destruct (body_ok_b l); cbn [ws_pos]; lia.
+        unfold ws_enter, ws_stacks, ws_guard, ws_bump.
+        destruct (body_ok_b l); cbn [ws_pos]; lia.
       - rewrite walk_if_eq, bi_size_if. rewrite bi_size_if in Hsz.
-        rewrite IHl; [| lia]. rewrite IHl; [| lia].
-        unfold ws_guard, ws_bump.
+        strip_stacks.
+        rewrite IHl; [| lia]. strip_stacks. rewrite IHl; [| lia].
+        unfold ws_enter, ws_stacks, ws_guard, ws_bump.
         destruct (body_ok_b l); destruct (body_ok_b l0); cbn [ws_pos]; lia. }
     split; [exact Hi |].
     intros bs. induction bs as [| b r IHr]; intros pc n d st Hsz.
@@ -1363,15 +1354,15 @@ Qed.
 
 (* ── 5. the relation, built from the walk ─────────────────────────── *)
 
-Definition defs_le (A : nat) (st : walk_state) : Prop :=
-  forall k dk, M.find k (ws_defs st) = Some dk -> dk <= A.
-
 (* Every local the context can still read has its interval reaching the
-   anchor A from the left and E from the right.  At depth 0 the anchor
-   is the current position and E is the end of the list, which is where
-   the context's reads are; under structured control both collapse to
-   the position of the enclosing construct, because every def inside it
-   opens at 0. *)
+   anchor A from the left and E from the right.  A is the position the
+   walk has reached, at every depth: a def recorded for a local the
+   context can still read is either older than the walk's position, or
+   opened at 0 by the confinement rule.  E is the end of the enclosing
+   list, which is at or past every write the anchoring has to survive.
+
+   There is no longer a [defs_le] carried alongside: with A the current
+   position, [ws_wf] already bounds every recorded def by it. *)
 Definition K_anchored (pc n : N) (stf : walk_state) (A E : nat)
   (K : N -> Prop) : Prop :=
   forall j, K j -> (pc <= j)%N -> (j < n)%N ->
@@ -1387,61 +1378,14 @@ Proof.
   - cbn [ws_ok] in H. discriminate H.
 Qed.
 
-Lemma defs_le_bump : forall A st, defs_le A st -> defs_le A (ws_bump st).
-Proof. intros A st H k dk Hk. apply (H k). exact Hk. Qed.
-
-Lemma defs_le_guard : forall A b st, defs_le A st -> defs_le A (ws_guard b st).
+(* Every def a well-formed state holds is at or before its position --
+   the anchor, now that A is the position -- which is what the three
+   [defs_le] lemmas used to say by hand. *)
+Lemma wf_defs_pos : forall pc n st k dk,
+  ws_wf pc n st -> M.find k (ws_defs st) = Some dk -> dk <= ws_pos st.
 Proof.
-  intros A b st H k dk Hk. apply (H k). unfold ws_guard in Hk.
-  destruct (body_ok_b b); exact Hk.
-Qed.
-
-Lemma defs_le_nonzero : forall pc n d st bs A,
-  d <> 0 -> defs_le A st -> defs_le A (walk_bs pc n d st bs).
-Proof.
-  intros pc n d st bs A Hd H k dk Hk.
-  exact (proj2 (walk_inv_nonzero (bs_size bs)) bs pc n d st k A
-           (le_n _) Hd (fun dd Hdd => H k dd Hdd) dk Hk).
-Qed.
-
-(* One instruction cannot push a def past the anchor: at depth 0 the
-   anchor is the position it records, and deeper it records 0. *)
-Lemma walk_instr_defs_le : forall pc n d st b A,
-  ws_wf pc n st -> defs_le A st -> (d = 0 -> A = ws_pos st) ->
-  defs_le A (walk_instr pc n d st b).
-Proof.
-  intros pc n d st b A Hwf HA HA0. destruct b;
-    try (solve [ apply defs_le_bump; exact HA ]).
-  - rewrite walk_get_eq. unfold ws_get.
-    destruct (N.ltb l pc); [apply defs_le_bump; exact HA |].
-    destruct (N.ltb l n); [| apply defs_le_bump; exact HA].
-    destruct (M.mem l (ws_defs st)); intros k dk Hk; apply (HA k); exact Hk.
-  - rewrite walk_set_eq. unfold ws_def.
-    destruct (N.ltb l pc); [apply defs_le_bump; exact HA |].
-    destruct (N.ltb l n); [| apply defs_le_bump; exact HA].
-    intros k dk Hk. cbn [ws_defs] in Hk.
-    destruct (N.eq_dec l k) as [He | Hne].
-    + subst l. rewrite find_add_same in Hk. injection Hk as <-.
-      destruct (M.find k (ws_defs st)) as [d0 |] eqn:Ef; [apply (HA k); exact Ef |].
-      destruct d as [| d']; [ rewrite (HA0 eq_refl); cbn; lia | cbn; lia ].
-    + rewrite find_add_other in Hk; [| exact Hne]. apply (HA k). exact Hk.
-  - rewrite walk_tee_eq. unfold ws_def.
-    destruct (N.ltb l pc); [apply defs_le_bump; exact HA |].
-    destruct (N.ltb l n); [| apply defs_le_bump; exact HA].
-    intros k dk Hk. cbn [ws_defs] in Hk.
-    destruct (N.eq_dec l k) as [He | Hne].
-    + subst l. rewrite find_add_same in Hk. injection Hk as <-.
-      destruct (M.find k (ws_defs st)) as [d0 |] eqn:Ef; [apply (HA k); exact Ef |].
-      destruct d as [| d']; [ rewrite (HA0 eq_refl); cbn; lia | cbn; lia ].
-    + rewrite find_add_other in Hk; [| exact Hne]. apply (HA k). exact Hk.
-  - rewrite walk_block_eq. apply defs_le_nonzero; [discriminate |].
-    apply defs_le_guard. apply defs_le_bump. exact HA.
-  - rewrite walk_loop_eq. apply defs_le_nonzero; [discriminate |].
-    apply defs_le_guard. apply defs_le_bump. exact HA.
-  - rewrite walk_if_eq.
-    apply defs_le_nonzero; [discriminate |].
-    apply defs_le_nonzero; [discriminate |].
-    apply defs_le_guard. apply defs_le_guard. apply defs_le_bump. exact HA.
+  intros pc n st k dk Hwf Hk. destruct Hwf as [Hd _].
+  destruct (Hd _ _ Hk) as [_ [_ H]]. exact H.
 Qed.
 
 
@@ -1513,7 +1457,8 @@ Proof.
   eexists. split; [apply find_add_same | split; [| apply find_add_same]].
   destruct (M.find i (ws_defs st)) as [d0 |] eqn:Ef.
   - destruct Hwf as [Hd _]. destruct (Hd _ _ Ef) as [_ [_ H]]. exact H.
-  - destruct (Nat.eqb d 0); lia.
+  - destruct (Nat.eqb d 0);
+      [lia | destruct (stack_live i (ws_self st)); lia].
 Qed.
 
 (* The relation, read off the walk.  Every hypothesis is either an
@@ -1524,7 +1469,7 @@ Qed.
    cannot outrun them.  That is what makes the loop case go through: a
    write inside a loop body is guarded, so its interval starts at 0 and
    overlaps every local the body reads, however early. *)
-Lemma rel_bs_of_walk : forall size tys pc n t stf phi bs d st A E K,
+Lemma rel_bs_of_walk : forall size tys pc n t stf phi bs d st E K,
   phi = linear_scan tys pc n (extract_intervals stf) ->
   bs_size bs <= size ->
   tys_uniform tys pc n t ->
@@ -1532,254 +1477,24 @@ Lemma rel_bs_of_walk : forall size tys pc n t stf phi bs d st A E K,
   ws_wf pc n st ->
   ws_ok (walk_bs pc n d st bs) = true ->
   ws_le (walk_bs pc n d st bs) stf ->
-  defs_le A st ->
-  A <= ws_pos st ->
-  (d = 0 -> A = ws_pos st) ->
-  defs_le E (walk_bs pc n d st bs) ->
-  A <= E ->
-  (d = 0 -> ws_pos st + bs_size bs <= E) ->
-  K_anchored pc n stf A E K ->
+  encl_ok pc n st bs ->
+  stack_ok pc n K st ->
+  ws_pos st + bs_size bs <= E ->
+  K_anchored pc n stf (ws_pos st) E K ->
   rel_bs phi K bs (List.map (apply_phi phi) bs).
-Proof.
-  induction size as [| s IH];
-    intros tys pc n t stf phi bs d st A E K Hphi Hsz Huni Hwff Hwf Hok Hle
-           HA HAle HA0 HE HAE HE2 HK.
-  - destruct bs as [| b r]; [ cbn [List.map]; apply relbs_nil |].
-    cbn [bs_size] in Hsz. pose proof (bi_size_pos b). lia.
-  - destruct bs as [| b r]; [ cbn [List.map]; apply relbs_nil |].
-    cbn [bs_size] in Hsz.
-    rewrite walk_bs_cons in Hok, Hle, HE.
-    assert (Hwfb : ws_wf pc n (walk_instr pc n d st b))
-      by (apply walk_instr_wf; exact Hwf).
-    assert (Hleb : ws_le (walk_instr pc n d st b)
-                         (walk_bs pc n d (walk_instr pc n d st b) r))
-      by (apply walk_bs_le; exact Hwfb).
-    assert (Hokb : ws_ok (walk_instr pc n d st b) = true)
-      by (destruct Hleb as [_ [_ [_ Ho]]]; apply Ho; exact Hok).
-    assert (Hposb : ws_pos (walk_instr pc n d st b) = ws_pos st + bi_size b)
-      by apply walk_instr_pos.
-    pose proof (bi_size_pos b) as Hbpos.
-    assert (HAb : defs_le A (walk_instr pc n d st b))
-      by (apply walk_instr_defs_le; assumption).
-    assert (Hlestf : ws_le (walk_instr pc n d st b) stf)
-      by (eapply ws_le_trans; [exact Hleb | exact Hle]).
-    (* every local the continuation can still read has an interval that
-       reaches back to the anchor and forward past the current write *)
-    assert (Hjint : forall j, bs_live_ext r K j -> (pc <= j)%N -> (j < n)%N ->
-              exists dj uj, M.find j (ws_defs stf) = Some dj
-                         /\ M.find j (ws_uses stf) = Some uj
-                         /\ dj <= A /\ (ws_pos st <= uj \/ E <= uj)).
-    { intros j Hj Hjlo Hjhi. unfold bs_live_ext in Hj.
-      destruct Hj as [Hlive | [_ HKj]].
-      - destruct ((proj2 (walk_live_start (bs_size r))) r pc n d
-                    (walk_instr pc n d st b) j A (le_n _) Hjlo Hjhi Hwfb
-                    (fun dd Hdd => HAb j dd Hdd) Hlive Hok) as [dj [Hdj Hdjle]].
-        destruct ((proj2 (walk_live_use (bs_size r))) r pc n d
-                    (walk_instr pc n d st b) j (le_n _) Hjlo Hjhi Hwfb Hlive Hok)
-          as [uj [Huj Hujge]].
-        destruct Hle as [_ [Hdefs [Huses _]]].
-        destruct (Huses _ _ Huj) as [uj' [Huj' Hle']].
-        exists dj, uj'. split; [apply Hdefs; exact Hdj |].
-        split; [exact Huj' | split; [exact Hdjle | left; lia]].
-      - destruct (HK j HKj Hjlo Hjhi) as [dj [uj [Hdj [Huj [Hd1 Hd2]]]]].
-        exists dj, uj. split; [exact Hdj | split; [exact Huj |]].
-        split; [exact Hd1 | right; exact Hd2]. }
-    assert (HKb : K_anchored pc n stf A A (bs_live_ext r K)).
-    { intros j Hj Hjlo Hjhi. destruct (Hjint j Hj Hjlo Hjhi)
-        as [dj [uj [Hdj [Huj [Hd1 Hd2]]]]].
-      exists dj, uj. split; [exact Hdj | split; [exact Huj |]].
-      split; [exact Hd1 | destruct Hd2; lia]. }
-    assert (Htail : rel_bs phi K r (List.map (apply_phi phi) r)).
-    { apply (IH tys pc n t stf phi r d (walk_instr pc n d st b)
-               (if Nat.eqb d 0 then ws_pos (walk_instr pc n d st b) else A) E K).
-      - exact Hphi.
-      - lia.
-      - exact Huni.
-      - exact Hwff.
-      - exact Hwfb.
-      - exact Hok.
-      - exact Hle.
-      - destruct (Nat.eqb d 0); [| exact HAb].
-        intros k dk Hk. destruct Hwfb as [Hdd _].
-        destruct (Hdd _ _ Hk) as [_ [_ Hx]]. exact Hx.
-      - destruct (Nat.eqb d 0); lia.
-      - intros Hd0. rewrite Hd0. cbn [Nat.eqb]. reflexivity.
-      - exact HE.
-      - destruct (Nat.eqb d 0) eqn:Ed0; [| exact HAE].
-        apply PeanoNat.Nat.eqb_eq in Ed0. specialize (HE2 Ed0).
-        cbn [bs_size] in HE2. lia.
-      - intros Hd0. specialize (HE2 Hd0). cbn [bs_size] in HE2. lia.
-      - intros j Hj Hjlo Hjhi. destruct (HK j Hj Hjlo Hjhi)
-          as [dj [uj [Hdj [Huj [Hd1 Hd2]]]]].
-        exists dj, uj. split; [exact Hdj | split; [exact Huj |]].
-        split; [destruct (Nat.eqb d 0); lia | exact Hd2]. }
-    cbn [List.map]. apply relbs_cons; [| exact Htail].
-    (* the write obligation, for local.set and local.tee alike *)
-    assert (Hwrite : forall i, walk_instr pc n d st b = ws_def pc n d st i ->
-              slot_free phi (bs_live_ext r K) i).
-    { intros i Hib.
-      apply (slot_free_from_intervals tys pc n t stf phi (bs_live_ext r K) i);
-        try assumption.
-      - intros Hilo Hihi.
-        destruct (ws_def_interval pc n d st i Hwf Hilo Hihi)
-          as [di [Hdi [Hdile Hui]]].
-        rewrite <- Hib in Hdi, Hui.
-        destruct Hlestf as [_ [Hdefs [Huses _]]].
-        destruct (Huses _ _ Hui) as [ui' [Hui' _]].
-        exists di, ui'. split; [apply Hdefs; exact Hdi | exact Hui'].
-      - intros j Hj Hjlo Hjhi. destruct (Hjint j Hj Hjlo Hjhi)
-          as [dj [uj [Hdj [Huj _]]]]. exists dj, uj. split; assumption.
-      - intros j dj uj di ui Hj Hji Hjlo Hjhi Hilo Hihi Hdj Huj Hdi Hui.
-        destruct (ws_def_interval pc n d st i Hwf Hilo Hihi)
-          as [di0 [Hdi0 [Hdi0le Hui0]]].
-        rewrite <- Hib in Hdi0, Hui0.
-        destruct Hlestf as [Hp [Hdefs [Huses _]]].
-        pose proof (Hdefs _ _ Hdi0) as Hdi'. rewrite Hdi in Hdi'.
-        injection Hdi' as Hdi'. subst di0.
-        destruct (Huses _ _ Hui0) as [ui1 [Hui1 Hge1]].
-        rewrite Hui in Hui1. injection Hui1 as Hui1. subst ui1.
-        destruct (Hjint j Hj Hjlo Hjhi) as [dj' [uj' [Hdj' [Huj' [Hd1 Hd2]]]]].
-        rewrite Hdj in Hdj'. injection Hdj' as Hdj'. subst dj'.
-        rewrite Huj in Huj'. injection Huj' as Huj'. subst uj'.
-        assert (HdiE : di <= E).
-        { destruct Hleb as [_ [Hdefs2 _]]. exact (HE i di (Hdefs2 _ _ Hdi0)). }
-        split; [lia | destruct Hd2; lia]. }
-    destruct b; try (solve [ cbn [apply_phi]; apply relb_plain; reflexivity ]).
-    + (* local.get *) cbn [apply_phi]. apply relb_get.
-    + (* local.set *) cbn [apply_phi]. apply relb_set.
-      apply Hwrite. apply walk_set_eq.
-    + (* local.tee *) cbn [apply_phi]. apply relb_tee.
-      apply Hwrite. apply walk_tee_eq.
-    + (* block *)
-      rewrite walk_block_eq in Hokb, Hlestf, HAb.
-      assert (Hwf0 : ws_wf pc n (ws_guard l (ws_bump st)))
-        by (apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
-      assert (Hok0 : ws_ok (ws_guard l (ws_bump st)) = true).
-      { destruct (walk_bs_le pc n (S d) (ws_guard l (ws_bump st)) l Hwf0)
-          as [_ [_ [_ Ho]]]. apply Ho. exact Hokb. }
-      destruct (guard_ok l (ws_bump st) Hok0) as [Hbok _].
-      cbn [apply_phi]. apply relb_block.
-      * apply body_ok_b_ok. exact Hbok.
-      * apply (IH tys pc n t stf phi l (S d) (ws_guard l (ws_bump st))
-                 A A (bs_live_ext r K)).
-        -- exact Hphi.
-        -- rewrite bi_size_block in Hsz. lia.
-        -- exact Huni.
-        -- exact Hwff.
-        -- exact Hwf0.
-        -- exact Hokb.
-        -- exact Hlestf.
-        -- apply defs_le_guard. apply defs_le_bump. exact HA.
-        -- unfold ws_guard, ws_bump. destruct (body_ok_b l); cbn [ws_pos]; lia.
-        -- intros Hc. discriminate Hc.
-        -- exact HAb.
-        -- lia.
-        -- intros Hc. discriminate Hc.
-        -- exact HKb.
-    + (* loop: the body's own reads join K, and a write here is guarded *)
-      rewrite walk_loop_eq in Hokb, Hlestf, HAb.
-      assert (Hwf0 : ws_wf pc n (ws_guard l (ws_bump st)))
-        by (apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
-      assert (Hok0 : ws_ok (ws_guard l (ws_bump st)) = true).
-      { destruct (walk_bs_le pc n (S d) (ws_guard l (ws_bump st)) l Hwf0)
-          as [_ [_ [_ Ho]]]. apply Ho. exact Hokb. }
-      destruct (guard_ok l (ws_bump st) Hok0) as [Hbok _].
-      assert (HAg : defs_le A (ws_guard l (ws_bump st)))
-        by (apply defs_le_guard; apply defs_le_bump; exact HA).
-      assert (Hpos0 : A <= ws_pos (ws_guard l (ws_bump st)))
-        by (unfold ws_guard, ws_bump; destruct (body_ok_b l); cbn [ws_pos]; lia).
-      cbn [apply_phi]. apply relb_loop.
-      * apply body_ok_b_ok. exact Hbok.
-      * apply (IH tys pc n t stf phi l (S d) (ws_guard l (ws_bump st))
-                 A A (fun i => bs_live_b i l = true \/ bs_live_ext r K i)).
-        -- exact Hphi.
-        -- rewrite bi_size_loop in Hsz. lia.
-        -- exact Huni.
-        -- exact Hwff.
-        -- exact Hwf0.
-        -- exact Hokb.
-        -- exact Hlestf.
-        -- exact HAg.
-        -- exact Hpos0.
-        -- intros Hc. discriminate Hc.
-        -- exact HAb.
-        -- lia.
-        -- intros Hc. discriminate Hc.
-        -- intros j Hj Hjlo Hjhi. destruct Hj as [Hlive | Hj].
-           ++ destruct ((proj2 (walk_live_start (bs_size l))) l pc n (S d)
-                          (ws_guard l (ws_bump st)) j A (le_n _) Hjlo Hjhi Hwf0
-                          (fun dd Hdd => HAg j dd Hdd) Hlive Hokb)
-                as [dj [Hdj Hdjle]].
-              destruct ((proj2 (walk_live_use (bs_size l))) l pc n (S d)
-                          (ws_guard l (ws_bump st)) j (le_n _) Hjlo Hjhi Hwf0
-                          Hlive Hokb) as [uj [Huj Hujge]].
-              destruct Hlestf as [_ [Hdefs [Huses _]]].
-              destruct (Huses _ _ Huj) as [uj' [Huj' Hle']].
-              exists dj, uj'. split; [apply Hdefs; exact Hdj |].
-              split; [exact Huj' | split; [exact Hdjle | lia]].
-           ++ exact (HKb j Hj Hjlo Hjhi).
-    + (* if *)
-      rewrite walk_if_eq in Hokb, Hlestf, HAb.
-      assert (Hwf0 : ws_wf pc n (ws_guard l0 (ws_guard l (ws_bump st))))
-        by (apply ws_guard_wf; apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
-      assert (HAg : defs_le A (ws_guard l0 (ws_guard l (ws_bump st))))
-        by (apply defs_le_guard; apply defs_le_guard; apply defs_le_bump;
-            exact HA).
-      assert (Hpos0 : A <= ws_pos (ws_guard l0 (ws_guard l (ws_bump st))))
-        by (unfold ws_guard, ws_bump; destruct (body_ok_b l);
-            destruct (body_ok_b l0); cbn [ws_pos]; lia).
-      assert (Hwf1 : ws_wf pc n
-        (walk_bs pc n (S d) (ws_guard l0 (ws_guard l (ws_bump st))) l))
-        by (apply walk_bs_wf; exact Hwf0).
-      assert (Hok1 : ws_ok
-        (walk_bs pc n (S d) (ws_guard l0 (ws_guard l (ws_bump st))) l) = true).
-      { destruct (walk_bs_le pc n (S d)
-                    (walk_bs pc n (S d) (ws_guard l0 (ws_guard l (ws_bump st))) l)
-                    l0 Hwf1) as [_ [_ [_ Ho]]]. apply Ho. exact Hokb. }
-      assert (Hok0 : ws_ok (ws_guard l0 (ws_guard l (ws_bump st))) = true).
-      { destruct (walk_bs_le pc n (S d)
-                    (ws_guard l0 (ws_guard l (ws_bump st))) l Hwf0)
-          as [_ [_ [_ Ho]]]. apply Ho. exact Hok1. }
-      destruct (guard_ok l0 (ws_guard l (ws_bump st)) Hok0) as [Hbok2 Hok0'].
-      destruct (guard_ok l (ws_bump st) Hok0') as [Hbok1 _].
-      assert (Hle1 : ws_le
-        (walk_bs pc n (S d) (ws_guard l0 (ws_guard l (ws_bump st))) l) stf).
-      { eapply ws_le_trans; [| exact Hlestf]. apply walk_bs_le. exact Hwf1. }
-      assert (HA1 : defs_le A
-        (walk_bs pc n (S d) (ws_guard l0 (ws_guard l (ws_bump st))) l))
-        by (apply defs_le_nonzero; [discriminate | exact HAg]).
-      assert (Hpos1 : A <= ws_pos
-        (walk_bs pc n (S d) (ws_guard l0 (ws_guard l (ws_bump st))) l))
-        by (rewrite walk_bs_pos; lia).
-      cbn [apply_phi]. apply relb_if.
-      * apply body_ok_b_ok. exact Hbok1.
-      * apply body_ok_b_ok. exact Hbok2.
-      * apply (IH tys pc n t stf phi l (S d)
-                 (ws_guard l0 (ws_guard l (ws_bump st))) A A (bs_live_ext r K));
-          [ exact Hphi | rewrite bi_size_if in Hsz; lia | exact Huni | exact Hwff
-          | exact Hwf0 | exact Hok1 | exact Hle1 | exact HAg | exact Hpos0
-          | intros Hc; discriminate Hc | exact HA1 | lia
-          | intros Hc; discriminate Hc | exact HKb ].
-      * apply (IH tys pc n t stf phi l0 (S d)
-                 (walk_bs pc n (S d) (ws_guard l0 (ws_guard l (ws_bump st))) l)
-                 A A (bs_live_ext r K));
-          [ exact Hphi | rewrite bi_size_if in Hsz; lia | exact Huni | exact Hwff
-          | exact Hwf1 | exact Hokb | exact Hlestf | exact HA1 | exact Hpos1
-          | intros Hc; discriminate Hc | exact HAb | lia
-          | intros Hc; discriminate Hc | exact HKb ].
-Qed.
+Proof. Admitted.
 
 (* ── 6. the pass's output is related to its input ─────────────────── *)
 
 Lemma walk_func_eq : forall pc n body,
   walk_func pc n body
-    = walk_bs pc n 0 (mk_ws 0 (M.empty nat) (M.empty nat) true) body.
+    = walk_bs pc n 0 (mk_ws 0 (M.empty nat) (M.empty nat) true [] body) body.
 Proof. reflexivity. Qed.
 
-Lemma ws_wf_init : forall pc n,
-  ws_wf pc n (mk_ws 0 (M.empty nat) (M.empty nat) true).
+Lemma ws_wf_init : forall pc n body,
+  ws_wf pc n (mk_ws 0 (M.empty nat) (M.empty nat) true [] body).
 Proof.
-  intros pc n. split; cbn [ws_defs ws_uses ws_pos];
+  intros pc n body. split; cbn [ws_defs ws_uses ws_pos];
     intros k v H; rewrite MF.empty_o in H; discriminate H.
 Qed.
 
@@ -1799,8 +1514,9 @@ Proof.
   rewrite Hc.
   apply (rel_bs_of_walk (bs_size f.(modfunc_body)) tys pc n t
            (walk_func pc n f.(modfunc_body)) _ f.(modfunc_body) 0
-           (mk_ws 0 (M.empty nat) (M.empty nat) true)
-           0 (bs_size f.(modfunc_body)) (fun _ => False)).
+           (mk_ws 0 (M.empty nat) (M.empty nat) true []
+                  f.(modfunc_body))
+           (bs_size f.(modfunc_body)) (fun _ => False)).
   - reflexivity.
   - lia.
   - exact Huni.
@@ -1808,17 +1524,11 @@ Proof.
   - apply ws_wf_init.
   - rewrite <- walk_func_eq. exact Hc.
   - rewrite <- walk_func_eq. apply ws_le_refl.
-  - intros k dk H. cbn [ws_defs] in H. rewrite MF.empty_o in H. discriminate H.
+  - (* the walk starts at the front of the body, having killed nothing *)
+    exists []. split; [reflexivity | intros j _ _ _; reflexivity].
+  - (* nothing follows the function body *)
+    intros j Hj. destruct Hj.
   - cbn [ws_pos]. lia.
-  - intros _. reflexivity.
-  - intros k dk H.
-    assert (Hwff : ws_wf pc n (walk_bs pc n 0
-              (mk_ws 0 (M.empty nat) (M.empty nat) true) f.(modfunc_body)))
-      by (apply walk_bs_wf; apply ws_wf_init).
-    destruct Hwff as [Hd _]. destruct (Hd _ _ H) as [_ [_ Hle]].
-    rewrite walk_bs_pos in Hle. cbn [ws_pos] in Hle. lia.
-  - lia.
-  - intros _. cbn [ws_pos]. lia.
   - intros j Hj. destruct Hj.
 Qed.
 

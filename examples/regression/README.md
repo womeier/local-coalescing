@@ -34,3 +34,12 @@ interferes with every other local. Restricting the pin to locals that are
 touched outside the construct guarding their def would recover most of that
 — worth roughly 2772 -> 3979 slots saved on `examples/sha.wasm` in a model
 of the change — but it is a second interval model and is not implemented.
+
+## arms
+
+A local written in one arm of an `if` and read in the other.  The read
+happens on a path where the write never ran, so the local is *not* dead
+outside its arm and its interval must open at function entry.  A walk
+that judges "dead outside" from the instructions textually following the
+arm misses the sibling and coalesces the local onto a dead one's slot;
+`f(0)` then returns 42 instead of 0.

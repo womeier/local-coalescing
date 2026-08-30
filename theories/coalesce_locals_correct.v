@@ -289,62 +289,8 @@ Qed.
    are treated as *not* killing (a branch may skip the write), so the
    live set is an over-approximation, which is what soundness needs. *)
 
-Definition bi_kills (i : N) (b : basic_instruction) : bool :=
-  match b with
-  | BI_local_set j => N.eqb i j
-  | BI_local_tee j => N.eqb i j
-  | _ => false
-  end.
-
-(* The list recursion is inlined as a local fix rather than written as a
-   mutual Fixpoint: Rocq's guard checker rejects mutual recursion that
-   alternates between a type and lists of it.  bi_live_block / _loop / _if
-   below recover the equations one would have written directly. *)
-Fixpoint bi_live (i : N) (b : basic_instruction) {struct b} : bool :=
-  let fix bsl (bs : list basic_instruction) : bool :=
-    match bs with
-    | [] => false
-    | b' :: rest => bi_live i b' || (negb (bi_kills i b') && bsl rest)
-    end in
-  match b with
-  | BI_local_get j => N.eqb i j
-  | BI_block _ bs => bsl bs
-  | BI_loop _ bs => bsl bs
-  | BI_if _ b1 b2 => bsl b1 || bsl b2
-  | _ => false
-  end.
-
-Fixpoint bs_live_b (i : N) (bs : list basic_instruction) : bool :=
-  match bs with
-  | [] => false
-  | b :: rest => bi_live i b || (negb (bi_kills i b) && bs_live_b i rest)
-  end.
-
-Lemma bi_live_block : forall i bt bs, bi_live i (BI_block bt bs) = bs_live_b i bs.
-Proof.
-  intros i bt bs. induction bs as [|b rest IH]; simpl; [reflexivity |].
-  simpl in IH. rewrite IH. reflexivity.
-Qed.
-
-Lemma bi_live_loop : forall i bt bs, bi_live i (BI_loop bt bs) = bs_live_b i bs.
-Proof.
-  intros i bt bs. induction bs as [|b rest IH]; simpl; [reflexivity |].
-  simpl in IH. rewrite IH. reflexivity.
-Qed.
-
-Lemma bi_live_if : forall i bt b1 b2,
-  bi_live i (BI_if bt b1 b2) = bs_live_b i b1 || bs_live_b i b2.
-Proof.
-  intros i bt b1 b2.
-  rewrite <- (bi_live_block i bt b1). rewrite <- (bi_live_block i bt b2).
-  reflexivity.
-Qed.
-
-Fixpoint bs_kills_b (i : N) (bs : list basic_instruction) : bool :=
-  match bs with
-  | [] => false
-  | b :: rest => bi_kills i b || bs_kills_b i rest
-  end.
+(* bi_kills / bi_live / bs_live_b / bs_kills_b now live in
+   coalesce_locals.v: the walk itself consults them. *)
 
 (* A trap kills everything.  Nothing after it runs, so no read of any local
    can follow -- which is what makes rs_trap work: that rule throws the
