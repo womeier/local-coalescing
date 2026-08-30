@@ -25,6 +25,22 @@ sha_ci:
     result/bin/wasm-opt-cert examples/sha.wasm examples/sha_opt.wasm
     (cd examples && node sha.js)
 
+# sha.wasm printed as .wat before and after the pass, and the diff of the
+# two -- what the pass actually did, in a form you can read.
+#
+# The diff is not printed: it runs to some 47k lines, which is useless in
+# a CI log.  It is written to examples/sha.wat.diff for the workflow to
+# upload as an artifact, and only the per-function declared-locals report
+# goes to stdout.
+sha_wat_diff: build
+    dune exec ./src/main.exe -- examples/sha.wasm examples/sha_opt.wasm
+    python3 examples/wat_diff.py examples/sha.wasm examples/sha_opt.wasm
+
+# Same, for CI, on the same `nix build` assumption as sha_ci.
+sha_wat_diff_ci:
+    result/bin/wasm-opt-cert examples/sha.wasm examples/sha_opt.wasm
+    python3 examples/wat_diff.py examples/sha.wasm examples/sha_opt.wasm
+
 clean:
     dune clean
 
