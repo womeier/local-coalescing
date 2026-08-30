@@ -35,7 +35,8 @@ jobs:
       # Build and push dev environment to Cachix
       - name: Build and push dev environment
         run: |
-          nix develop --profile dev-profile -c true
+          nix build
+          # nix develop --profile dev-profile -c true
           # cachix push womeier dev-profile
 
       # Enter Nix development environment and run an example
