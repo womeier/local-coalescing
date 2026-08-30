@@ -1,5 +1,5 @@
 From Wasm Require Import datatypes datatypes_properties opsem properties.
-From Stdlib Require Import List.
+From Stdlib Require Import List Lia.
 From Wasmopt Require Import coalesce_locals toplevel_spec.
 
 Import Bool ssreflect BinNat ListNotations.
@@ -165,15 +165,96 @@ Proof.
   destruct (ws_ok (walk_func pc n body)); [discriminate H | reflexivity].
 Qed.
 
-(* Unconditional: when the guard rejects a function, the pass is the
-   identity on it.  No hypotheses -- this is what makes a rejected input
-   (a second write to a local, or a def under structured control) safe. *)
+(* ── The truncation bound ─────────────────────────────────────────
+   [slot_bound pc n phi] is one past the largest slot phi can produce
+   from a source index in [pc, n), floored at pc.  Three facts are
+   wanted downstream and all three are folds: it dominates the image
+   (so the renamed body fits the shortened frame), it is dominated by
+   any bound on the image (so the truncation never lengthens the local
+   vector), and on the empty map it is exactly n (so a rejected
+   function keeps every local it declared). *)
+
+Lemma slot_bound_aux_ge : forall len phi k j,
+  (k <= j)%N -> (j < k + N.of_nat len)%N ->
+  (apply_phi_local phi j < slot_bound_aux phi k len)%N.
+Proof.
+  induction len as [| l IH]; intros phi k j H1 H2; cbn [slot_bound_aux].
+  - lia.
+  - destruct (N.eq_dec k j) as [He | Hne].
+    + subst j. lia.
+    + specialize (IH phi (N.succ k) j ltac:(lia) ltac:(lia)). lia.
+Qed.
+
+Lemma slot_bound_aux_le : forall len phi k B,
+  (forall j, (k <= j)%N -> (j < k + N.of_nat len)%N ->
+             (apply_phi_local phi j < B)%N) ->
+  (slot_bound_aux phi k len <= B)%N.
+Proof.
+  induction len as [| l IH]; intros phi k B H; cbn [slot_bound_aux].
+  - lia.
+  - assert (Hk : (apply_phi_local phi k < B)%N) by (apply H; lia).
+    assert (Hrest : (slot_bound_aux phi (N.succ k) l <= B)%N)
+      by (apply IH; intros j Hj1 Hj2; apply H; lia).
+    lia.
+Qed.
+
+Lemma slot_bound_aux_empty : forall len k,
+  N.max k (slot_bound_aux empty k len) = (k + N.of_nat len)%N.
+Proof.
+  induction len as [| l IH]; intros k; cbn [slot_bound_aux].
+  - lia.
+  - rewrite apply_phi_local_empty. specialize (IH (N.succ k)). lia.
+Qed.
+
+Lemma slot_bound_ge : forall pc n phi, (pc <= slot_bound pc n phi)%N.
+Proof. intros pc n phi. unfold slot_bound. lia. Qed.
+
+(* Every slot the renamed body can name is below the bound. *)
+Lemma slot_bound_hit : forall pc n phi j,
+  (pc <= j)%N -> (j < n)%N ->
+  (apply_phi_local phi j < slot_bound pc n phi)%N.
+Proof.
+  intros pc n phi j H1 H2. unfold slot_bound.
+  pose proof (slot_bound_aux_ge (N.to_nat n - N.to_nat pc) phi pc j H1
+                ltac:(lia)) as H. lia.
+Qed.
+
+(* And the bound never exceeds a bound already known for the image, so
+   the kept prefix is a prefix. *)
+Lemma slot_bound_le : forall pc n phi,
+  (pc <= n)%N ->
+  (forall j, (pc <= j)%N -> (j < n)%N -> (apply_phi_local phi j < n)%N) ->
+  (slot_bound pc n phi <= n)%N.
+Proof.
+  intros pc n phi Hpc H. unfold slot_bound.
+  assert (Haux : (slot_bound_aux phi pc (N.to_nat n - N.to_nat pc) <= n)%N)
+    by (apply slot_bound_aux_le; intros j Hj1 Hj2; apply H; lia).
+  lia.
+Qed.
+
+Lemma slot_bound_empty : forall pc n, (pc <= n)%N -> slot_bound pc n empty = n.
+Proof.
+  intros pc n H. unfold slot_bound. rewrite slot_bound_aux_empty. lia.
+Qed.
+
+(* When the guard rejects a function, the pass is the identity on it:
+   the map is empty, so no index is renamed and the bound is n, which
+   keeps every declared local.  The only hypothesis is the arity
+   discipline the pass is called under -- n counts the parameters plus
+   the declared locals -- without which "keep n - pc of them" would not
+   be the whole vector.  This is what makes a rejected input (a local
+   read before it is written, or a body that both branches and writes)
+   safe. *)
 Theorem coalesce_func_rejected_id : forall tys pc n f,
+  n = (pc + N.of_nat (length f.(modfunc_locals)))%N ->
   coalescable pc n (modfunc_body f) = false -> coalesce_func tys pc n f = f.
 Proof.
-  intros tys pc n f H. unfold coalesce_func.
+  intros tys pc n f Hn H. unfold coalesce_func.
   rewrite (compute_phi_rejected tys pc n (modfunc_body f) H).
-  unfold apply_phi_func. rewrite map_apply_phi_empty_id.
+  rewrite map_apply_phi_empty_id.
+  rewrite (slot_bound_empty pc n ltac:(lia)).
+  replace (N.to_nat (n - pc)) with (length f.(modfunc_locals)) by lia.
+  rewrite firstn_all.
   destruct f; reflexivity.
 Qed.
 

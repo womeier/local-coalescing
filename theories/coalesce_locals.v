@@ -34,6 +34,10 @@ Fixpoint apply_phi (phi : local_map) (i : basic_instruction) :
   | _                 => i
   end.
 
+(* The rename alone, leaving the declared locals as they were.
+   [coalesce_func] below is this plus the truncation; the two are kept
+   apart because only the rename is shape-preserving, and it is the
+   rename that the simulation is proved over. *)
 Definition apply_phi_func (phi : local_map) (f : module_func) : module_func :=
   {| modfunc_type   := f.(modfunc_type);
      modfunc_locals := f.(modfunc_locals);
@@ -274,8 +278,8 @@ Definition slot_used_by_active (slot : N) (active : list (N * nat)) :
 
 (* The declared value type of slot i.  Slots [0, param_count) are the
    parameters and [param_count, n) the declared locals, so the vector is
-   params ++ modfunc_locals; apply_phi_func leaves modfunc_locals alone, so a
-   slot keeps this type after coalescing. *)
+   params ++ modfunc_locals; coalesce_func only ever drops a suffix of
+   modfunc_locals, so a slot that survives keeps this type. *)
 Definition slot_types (types : list function_type) (f : module_func) :
   list value_type :=
   match lookup_N types f.(modfunc_type) with
@@ -350,12 +354,53 @@ Definition compute_phi (tys : list value_type) (param_count n : N)
     linear_scan tys param_count n (extract_intervals st)
   else empty.
 
+(* ── Dropping the slots the rename no longer reaches ───────────────
+   The scan packs the locals into the low slots, so the high ones come
+   out unmentioned and their declarations can go.  What bounds the
+   truncation is not the slots the scan *assigned* but the whole image
+   of phi over the declared range: a local the body never mentions at
+   all is absent from ws_defs, hence unassigned, hence left at its own
+   index by apply_phi_local, and dropping its declaration would leave a
+   frame too short for it.
+
+   That is a real restriction rather than a conservatism the proof
+   forces: [frames_agree] carries "every source index in range has its
+   slot in range" universally, not just for the indices the code
+   mentions, and a fresh activation has to satisfy it.  So one
+   never-mentioned local declared last pins the count at n.  Every
+   local CertiRocq emits is mentioned, and a local *read* without being
+   written makes the walk reject the function outright, so the case
+   that costs anything is a local declared and then used nowhere.
+
+   [slot_bound_aux] is [N.max] over [apply_phi_local phi k] for k in
+   [k, k + len), one past the largest, and [slot_bound] floors that at
+   pc so the parameters are always kept.  On a rejected function phi is
+   empty and the max is n, which is why the truncation degrades to
+   "keep everything" without a special case. *)
+
+Fixpoint slot_bound_aux (phi : local_map) (k : N) (len : nat) : N :=
+  match len with
+  | O   => 0%N
+  | S l => N.max (N.succ (apply_phi_local phi k))
+                 (slot_bound_aux phi (N.succ k) l)
+  end.
+
+Definition slot_bound (param_count n : N) (phi : local_map) : N :=
+  N.max param_count
+        (slot_bound_aux phi param_count (N.to_nat n - N.to_nat param_count)).
+
 (* ── M3: coalesce_func / coalesce_module ───────────────────────── *)
 
+(* The rename and the truncation share one [compute_phi]: it walks the
+   whole body, and the extracted code would otherwise run it twice. *)
 Definition coalesce_func (tys : list value_type) (param_count n : N)
   (f : module_func) : module_func :=
   let phi := compute_phi tys param_count n f.(modfunc_body) in
-  apply_phi_func phi f.
+  {| modfunc_type   := f.(modfunc_type);
+     modfunc_locals := List.firstn
+                         (N.to_nat (slot_bound param_count n phi - param_count))
+                         f.(modfunc_locals);
+     modfunc_body   := List.map (apply_phi phi) f.(modfunc_body) |}.
 
 Definition func_param_count (types : list function_type)
   (ti : typeidx) : N :=
