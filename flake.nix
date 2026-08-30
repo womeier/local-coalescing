@@ -70,6 +70,9 @@
             wasmcert-master
             pkgs.just
             pkgs.wasm-tools
+            # wasm-opt --coalesce-locals, the reference the wat_diff.py
+            # report measures our pass against.
+            pkgs.binaryen
             pkgs.dune_3
             # `just foo` / `just sha` run the optimized binaries under node,
             # and `just sha_check` drives examples/compare_output.py.

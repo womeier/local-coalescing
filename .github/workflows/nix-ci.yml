@@ -47,10 +47,9 @@ jobs:
         run: |
           nix develop --command bash -c "just sha_ci"
 
-      # What the pass did to sha.wasm, as .wat before and after.  The
-      # diff is far too large to print (~47k lines), so the step logs
-      # only the per-function locals report and the three files go up as
-      # an artifact to be read there.
+      # sha.wasm as .wat before and after the pass, with a per-function
+      # count of the locals each side declares, against wasm-opt
+      # --coalesce-locals on the same input.
       - name: Wat diff
         run: |
           nix develop --command bash -c "just sha_wat_diff_ci"
