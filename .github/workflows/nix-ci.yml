@@ -1,0 +1,52 @@
+name: Nix CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Install Nix
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      # Set up Cachix (womeier; cachix-action degrades to read-only on PRs)
+      - uses: cachix/cachix-action@v17
+        with:
+          name: womeier
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      # Use additional Cachix caches
+      - name: Use additional Cachix caches
+        run: |
+          cachix use coq
+          cachix use coq-community
+          cachix use math-comp
+
+      # Build the OCaml extraction and push it to Cachix
+      - name: Nix build
+        run: |
+          nix build
+          cachix push womeier result
+
+      # Build and push dev environment to Cachix
+      # - name: Build and push dev environment
+      #   run: |
+      #     nix develop --profile dev-profile -c true
+      #     cachix push womeier dev-profile
+
+      # Enter Nix development environment and run an example
+      - name: Run example
+        run: |
+          nix develop --command bash -c "just sha_ci"
+
+      # - name: Print assumptions
+      #   run: |
+      #     nix develop --command bash -c "just print_assumptions"

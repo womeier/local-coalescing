@@ -92,7 +92,7 @@ let
 
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
-    outputHash = "sha256-ZCptMBQ4yorzDhYjf9xWP4PzIMOCzLL/CXTlxsPqxfc=";
+    outputHash = "sha256-j4+Ax/7EpHnaJKCCYNuwMpgAjqGfh4dzuaaw33kCxi0=";
   };
 
   rocq-mcp = pkgs.stdenv.mkDerivation {
