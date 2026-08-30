@@ -1,6 +1,10 @@
 name: Nix CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 
 jobs:
   build:
@@ -43,3 +47,7 @@ jobs:
       - name: Run example
         run: |
           nix develop --command bash -c "just sha"
+
+      - name: Print assumptions
+        run: |
+          nix develop --command bash -c "just print_assumptions"
