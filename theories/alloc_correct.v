@@ -1484,6 +1484,121 @@ Proof.
         exact (defs_none_walk pc n d st b j Hwf Hnone).
 Qed.
 
+(* A def of a local the walk is inside is never found past P: an already
+   recorded def keeps its value, and a first def under structured control
+   opens at 0 whenever the enclosing lists read the local, which is what
+   [seen_or_live] carries.  The seen condition is only consulted for
+   structured instructions -- a flat write of [j] records at or below the
+   current position regardless. *)
+Lemma walk_instr_inv_seen : forall pc n d st b j P,
+  ws_wf pc n st -> inv_j j P st ->
+  (bi_kills j b = false -> seen_or_live j st) ->
+  ws_pos st <= P ->
+  inv_j j P (walk_instr pc n d st b).
+Proof.
+  intros pc n d st b j P Hwf Hinv Hseen Hpos. destruct b;
+    try (solve [ apply inv_j_bump; exact Hinv ]).
+  - rewrite walk_get_eq. unfold ws_get.
+    destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
+    destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
+    destruct (M.mem l (ws_defs st)); intros dd Hdd; apply Hinv; exact Hdd.
+  - rewrite walk_set_eq. unfold ws_def.
+    destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
+    destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
+    intros dd Hdd. cbn [ws_defs] in Hdd.
+    destruct (N.eq_dec l j) as [He | Hne].
+    + subst l. rewrite find_add_same in Hdd. injection Hdd as <-.
+      destruct (M.find j (ws_defs st)) as [d0 |] eqn:Ef;
+        [ apply Hinv; exact Ef |].
+      destruct (Nat.eqb d 0); [lia | destruct (stack_read j (ws_self st)); lia].
+    + rewrite find_add_other in Hdd; [| exact Hne]. apply Hinv. exact Hdd.
+  - rewrite walk_tee_eq. unfold ws_def.
+    destruct (N.ltb l pc); [apply inv_j_bump; exact Hinv |].
+    destruct (N.ltb l n); [| apply inv_j_bump; exact Hinv].
+    intros dd Hdd. cbn [ws_defs] in Hdd.
+    destruct (N.eq_dec l j) as [He | Hne].
+    + subst l. rewrite find_add_same in Hdd. injection Hdd as <-.
+      destruct (M.find j (ws_defs st)) as [d0 |] eqn:Ef;
+        [ apply Hinv; exact Ef |].
+      destruct (Nat.eqb d 0); [lia | destruct (stack_read j (ws_self st)); lia].
+    + rewrite find_add_other in Hdd; [| exact Hne]. apply Hinv. exact Hdd.
+  - rewrite walk_block_eq.
+    assert (Hse : seen_or_live j st) by (apply Hseen; reflexivity).
+    assert (Hinv0 : inv_j j P (ws_enter l st (ws_guard l (ws_bump st)))).
+    { apply (inv_j_defs j P st); [| exact Hinv].
+      rewrite ws_defs_enter, ws_defs_guard. reflexivity. }
+    assert (Hwf0 : ws_wf pc n (ws_enter l st (ws_guard l (ws_bump st))))
+      by (apply ws_enter_wf; apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
+    destruct (M.find j (ws_defs st)) as [dj |] eqn:Ef.
+    + assert (Ef0 : M.find j (ws_defs (ws_enter l st (ws_guard l (ws_bump st)))) = Some dj).
+      { rewrite ws_defs_enter, ws_defs_guard. exact Ef. }
+      exact (inv_j_persist pc n (S d) _ l j dj P Hwf0 Ef0 Hinv0).
+    + assert (Hseen0 : stack_read j (ws_self (ws_enter l st (ws_guard l (ws_bump st)))) = true).
+      { rewrite ws_self_enter. exact (Hse Ef). }
+      exact (proj2 (walk_inv_seen (bs_size l)) l pc n (S d) _ j P (le_n _)
+               ltac:(discriminate) Hinv0 Hseen0).
+  - rewrite walk_loop_eq.
+    assert (Hse : seen_or_live j st) by (apply Hseen; reflexivity).
+    assert (Hinv0 : inv_j j P (ws_enter l st (ws_guard l (ws_bump st)))).
+    { apply (inv_j_defs j P st); [| exact Hinv].
+      rewrite ws_defs_enter, ws_defs_guard. reflexivity. }
+    assert (Hwf0 : ws_wf pc n (ws_enter l st (ws_guard l (ws_bump st))))
+      by (apply ws_enter_wf; apply ws_guard_wf; apply ws_bump_wf; exact Hwf).
+    destruct (M.find j (ws_defs st)) as [dj |] eqn:Ef.
+    + assert (Ef0 : M.find j (ws_defs (ws_enter l st (ws_guard l (ws_bump st)))) = Some dj).
+      { rewrite ws_defs_enter, ws_defs_guard. exact Ef. }
+      exact (inv_j_persist pc n (S d) _ l j dj P Hwf0 Ef0 Hinv0).
+    + assert (Hseen0 : stack_read j (ws_self (ws_enter l st (ws_guard l (ws_bump st)))) = true).
+      { rewrite ws_self_enter. exact (Hse Ef). }
+      exact (proj2 (walk_inv_seen (bs_size l)) l pc n (S d) _ j P (le_n _)
+               ltac:(discriminate) Hinv0 Hseen0).
+  - rewrite walk_if_eq.
+    assert (Hse : seen_or_live j st) by (apply Hseen; reflexivity).
+    assert (Hinv0 : inv_j j P (ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st))))).
+    { apply (inv_j_defs j P st); [| exact Hinv].
+      rewrite ws_defs_enter, !ws_defs_guard. reflexivity. }
+    assert (Hwf0 : ws_wf pc n (ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st)))))
+      by (apply ws_enter_wf; apply ws_guard_wf; apply ws_guard_wf;
+          apply ws_bump_wf; exact Hwf).
+    destruct (M.find j (ws_defs st)) as [dj |] eqn:Ef.
+    + assert (Ef0 : M.find j (ws_defs (ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st))))) = Some dj).
+      { rewrite ws_defs_enter, !ws_defs_guard. exact Ef. }
+      assert (Hinv1 : inv_j j P (walk_bs pc n (S d)
+                        (ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st)))) l))
+        by exact (inv_j_persist pc n (S d) _ l j dj P Hwf0 Ef0 Hinv0).
+      assert (Ef1 : M.find j (ws_defs (ws_enter l0 st
+                        (walk_bs pc n (S d) (ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st)))) l)))
+                    = Some dj).
+      { rewrite ws_defs_enter.
+        destruct (walk_bs_le pc n (S d) _ l Hwf0) as [_ [Hdp _]].
+        apply Hdp. exact Ef0. }
+      exact (inv_j_persist pc n (S d) _ l0 j dj P
+               (ws_enter_wf pc n l0 st _ (walk_bs_wf pc n (S d) _ l Hwf0))
+               Ef1
+               (inv_j_defs j P _ _ (ws_defs_enter l0 st _) Hinv1)).
+    + assert (Hinv1 : inv_j j P (walk_bs pc n (S d)
+                        (ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st)))) l)).
+      { apply (proj2 (walk_inv_seen (bs_size l)) l pc n (S d) _ j P (le_n _)
+                 ltac:(discriminate)).
+        - exact Hinv0.
+        - rewrite ws_self_enter. exact (Hse Ef). }
+      assert (Hseen1 : stack_read j (ws_self (ws_enter l0 st
+                         (walk_bs pc n (S d) (ws_enter l st (ws_guard l0 (ws_guard l (ws_bump st)))) l))) = true).
+      { rewrite ws_self_enter. exact (Hse Ef). }
+      exact (proj2 (walk_inv_seen (bs_size l0)) l0 pc n (S d) _ j P (le_n _)
+               ltac:(discriminate)
+               (inv_j_defs j P _ _ (ws_defs_enter l0 st _) Hinv1) Hseen1).
+Qed.
+
+Lemma stack_ok_step : forall pc n d K st b,
+  ws_wf pc n st -> stack_ok pc n K st -> stack_ok pc n K (walk_instr pc n d st b).
+Proof.
+  intros pc n d K st b Hwf Hst j Hj Hlo Hhi Hnone.
+  destruct (walk_instr_stacks pc n d st b) as [_ Hs].
+  rewrite Hs. apply Hst; [exact Hj | exact Hlo | exact Hhi |].
+  exact (defs_none_walk pc n d st b j Hwf Hnone).
+Qed.
+
 (* ── 4. from the walk's maps to phi ───────────────────────────────── *)
 
 Lemma walk_pos : forall size,
@@ -1782,6 +1897,15 @@ Definition K_anchored (pc n : N) (stf : walk_state) (A E : nat)
     exists dj uj, M.find j (ws_defs stf) = Some dj
                /\ M.find j (ws_uses stf) = Some uj
                /\ dj <= A /\ E <= uj.
+
+Lemma K_anchored_mono : forall pc n stf A E K A',
+  A' <= A -> K_anchored pc n stf A' E K -> K_anchored pc n stf A E K.
+Proof.
+  intros pc n stf A E K A' Hle HK j Hj Hlo Hhi.
+  destruct (HK j Hj Hlo Hhi) as [dj [uj [Hdj [Huj [H1 H2]]]]].
+  exists dj, uj. split; [exact Hdj | split; [exact Huj |]].
+  split; [lia | exact H2].
+Qed.
 
 Lemma guard_ok : forall b st,
   ws_ok (ws_guard b st) = true -> body_ok_b b = true /\ ws_ok st = true.
