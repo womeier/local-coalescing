@@ -930,6 +930,56 @@ Proof.
       + eapply rel_bs_weaken; eassumption. }
 Qed.
 
+(* A body whose hazard-freedom forces write-freedom can be related under
+   any live set: its slot_free obligations (carried only by local.set and
+   local.tee) never arise, so K is inert.  This is what lets the loop
+   step re-tag a write-free loop body with the label's own live set after
+   relb_loop has dropped the bs_live_b disjunct. *)
+Scheme rel_bs_agnostic_ind := Induction for rel_bs Sort Prop
+  with rel_b_agnostic_ind := Induction for rel_b Sort Prop.
+
+Lemma rel_bs_agnostic : forall phi K K' bs bs_o,
+  bs_writes bs = false -> rel_bs phi K bs bs_o -> rel_bs phi K' bs bs_o.
+Proof.
+  intros phi K K' bs bs_o Hw H.
+  revert K' Hw.
+  induction H using rel_bs_agnostic_ind with
+    (P := fun phi K bs bs_o H => forall K', bs_writes bs = false -> rel_bs phi K' bs bs_o)
+    (P0 := fun phi K b b_o H => forall K', bs_writes [b] = false -> rel_b phi K' b b_o).
+  - intros K' _. apply relbs_nil.
+  - intros K0 Hw'.
+    apply relbs_cons.
+    + apply IHrel_bs.
+      cbn [bs_writes] in Hw'. apply Bool.orb_false_iff in Hw'.
+      cbn [bs_writes]. rewrite (proj1 Hw'). reflexivity.
+    + apply IHrel_bs0.
+      cbn [bs_writes] in Hw'. apply Bool.orb_false_iff in Hw'.
+      destruct Hw' as [_ Ht]. exact Ht.
+  - intros K0 _. apply relb_plain. assumption.
+  - intros K0 _. apply relb_get.
+  - intros K0 Hhb. cbn [bs_writes bi_writes] in Hhb. discriminate.
+  - intros K0 Hhb. cbn [bs_writes bi_writes] in Hhb. discriminate.
+  - intros K0 Hhb.
+    apply relb_block; [ assumption |].
+    apply IHrel_bs.
+    cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb.
+    rewrite bi_writes_block in Hhb. apply (proj1 Hhb).
+  - intros K0 Hhb.
+    apply relb_loop; [ assumption |].
+    apply IHrel_bs.
+    cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb.
+    rewrite bi_writes_loop in Hhb. apply (proj1 Hhb).
+  - intros K0 Hhb.
+    apply relb_if; try assumption.
+    + apply IHrel_bs1.
+      apply Bool.orb_false_iff in Hhb as [H1 _].
+      apply Bool.orb_false_iff in H1 as [H1 _]. exact H1.
+    + apply IHrel_bs2.
+      cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb as [H1 _].
+      rewrite bi_writes_if in H1. apply Bool.orb_false_iff in H1 as [_ H2].
+      exact H2.
+Qed.
+
 Lemma rel_e_weaken : forall phi K e e_o, rel_e phi K e e_o ->
   forall K', (forall i, K' i -> K i) -> rel_e phi K' e e_o
 with rel_es_weaken : forall phi K es es_o, rel_es phi K es es_o ->
