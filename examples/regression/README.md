@@ -12,6 +12,7 @@ against the original under node.
 | `loop`   | a local defined inside a `loop` body               | accepted, nothing coalesced |
 | `branch` | a local defined in one `if` branch, read after it  | accepted, nothing coalesced (the two locals are renamed but not merged) |
 | `types`  | an `i32` and an `i64` local with disjoint ranges    | module rejected: the pass only accepts all-`i32` locals |
+| `shadow` | a local first defined two levels down, then written again at the top level of the enclosing body | accepted, nothing coalesced: the nested def opens at 0 |
 
 `branch` and `types` were both real miscompilations:
 
@@ -43,3 +44,23 @@ outside its arm and its interval must open at function entry.  A walk
 that judges "dead outside" from the instructions textually following the
 arm misses the sibling and coalesces the local onto a dead one's slot;
 `f(0)` then returns 42 instead of 0.
+
+## shadow
+
+Not a miscompilation: both outputs run the same, and this case guards the
+*proof* rather than the behaviour.
+
+The enclosing-stack test asks whether a local is read outside the body its
+first def sits in.  Asking that with kill shadowing -- stopping at the
+first enclosing list that writes the local at its own top level -- makes
+the walk and the simulation relation disagree.  Here the outer block's
+body writes local 2 at its top level, so it shadows; but `bs_live_b`,
+which is the liveness the relation runs on, does not count a write nested
+inside a construct as a kill, so from outside the block local 2 is still
+live across it.  The nested def would then open at position 5 while the
+write to local 1 at position 1 still has local 2 live after it -- and the
+two locals, whose intervals are now disjoint, would share a slot.  The
+sharing is harmless at run time (the top-level write to local 2 cannot be
+branched past, since `body_ok_b` forbids a body that both writes and
+branches), but it is not derivable, and `rel_bs_of_walk` was false as long
+as the test shadowed.  `stack_read` therefore ignores kills.

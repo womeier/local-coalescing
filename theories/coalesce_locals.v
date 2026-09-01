@@ -198,19 +198,31 @@ Fixpoint bs_kills_b (i : N) (bs : list basic_instruction) : bool :=
   | b :: rest => bi_kills i b || bs_kills_b i rest
   end.
 
-(* The continuation of a body, as the stack of instruction lists still to
-   run when it finishes -- innermost first.  Kept as a stack rather than
-   appended into one list so that pushing is a cons: the walk pushes one
-   per nesting level, and an append at every instruction would be
-   quadratic on a 47k-instruction function.
+(* The lists enclosing the body being walked, innermost first.  Kept as a
+   stack rather than appended into one list so that pushing is a cons: the
+   walk pushes one per nesting level, and an append at every instruction
+   would be quadratic on a 47k-instruction function.
 
-   A local is live over the stack if some level reads it before a level
-   at or below kills it, which is [bs_live_ext] read one level at a
-   time. *)
-Fixpoint stack_live (i : N) (ls : list (list basic_instruction)) : bool :=
+   [stack_read] asks whether *any* enclosing level reads the local, with
+   no kill shadowing: a level that kills [i] does not stop the search at
+   the levels outside it.
+
+   Kill shadowing would be the sharper question -- a read beyond a kill
+   cannot observe what happens here -- but it is the wrong one, because
+   [bs_kills_b] and the liveness the simulation relation runs on disagree
+   about nested writes.  [bs_kills_b] only sees a write at the top level
+   of a list, so a body that writes [i] inside a nested block and then
+   again at its own top level counts as killing [i] here while
+   [bs_live_b] still reports [i] live across the whole construct from
+   outside.  Shadowing on that kill would confine the nested write to its
+   own position, and the interval would then start after an anchor that
+   still has [i] live -- see the third regression case in
+   examples/regression/README.md.  Ignoring kills is the conservative
+   direction: it opens more intervals at 0, never fewer. *)
+Fixpoint stack_read (i : N) (ls : list (list basic_instruction)) : bool :=
   match ls with
   | [] => false
-  | bs :: rest => bs_live_b i bs || (negb (bs_kills_b i bs) && stack_live i rest)
+  | bs :: rest => bs_live_b i bs || stack_read i rest
   end.
 
 (* ── M1: forward interval-collection walk ──────────────────────── *)
@@ -269,7 +281,11 @@ Definition ws_stacks (self : list (list basic_instruction))
    Nothing is lost by widening to the whole list: the two differ only on
    a read *before* the construct, and a local whose first def is inside
    the body can have no such read, because a read before any def sets
-   [ws_ok] false and the function is left alone. *)
+   [ws_ok] false and the function is left alone.
+
+   The test is [stack_read], not [stack_live]: see its definition above
+   for why a kill in an enclosing list must not shadow a read outside
+   it. *)
 Fixpoint walk_instr
   (param_count n : N)
   (depth : nat)
@@ -295,7 +311,7 @@ Fixpoint walk_instr
         match M.find idx st.(ws_defs) with
         | Some d => d                                (* keep the first def *)
         | None   => if Nat.eqb depth 0 then pos      (* dominating def     *)
-                    else if stack_live idx st.(ws_self) then 0
+                    else if stack_read idx st.(ws_self) then 0
                                                      (* read outside: entry *)
                     else pos                         (* dead outside it     *)
         end in
