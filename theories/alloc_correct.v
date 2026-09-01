@@ -2016,7 +2016,7 @@ Lemma rel_bs_of_walk : forall size tys pc n t stf phi bs d st E K,
   ws_le (walk_bs pc n d st bs) stf ->
   encl_ok pc n st bs ->
   stack_ok pc n K st ->
-  ws_pos st + bs_size bs <= E ->
+  (d = 0 -> ws_pos st + bs_size bs <= E) ->
   K_anchored pc n stf (ws_pos st) E K ->
   rel_bs phi K bs (List.map (apply_phi phi) bs).
 Proof. Admitted.
@@ -2065,7 +2065,7 @@ Proof.
     exists []. split; [reflexivity | intros j _ _ _; reflexivity].
   - (* nothing follows the function body *)
     intros j Hj. destruct Hj.
-  - cbn [ws_pos]. lia.
+  - intros _. cbn [ws_pos]. lia.
   - intros j Hj. destruct Hj.
 Qed.
 
