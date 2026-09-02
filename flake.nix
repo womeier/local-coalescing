@@ -65,6 +65,7 @@
           name = "wasm-opt-cert";
           packages = [
             rocq-core
+            rocqPackages.dpdgraph
             # provides the `pet` binary rocq-mcp's interactive tools need.
             rocqPackages.coq-lsp
             wasmcert-master

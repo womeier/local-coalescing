@@ -92,16 +92,6 @@ Definition R_phi_live (phi : local_map) (L : N -> Prop) (locs locs' : list value
     nth_error locs (N.to_nat i) =
     nth_error locs' (N.to_nat (apply_phi_local phi i)).
 
-(* R_phi is the special case where everything is live, so the old (false for
-   merging phi) situation is recovered exactly by taking L := fun _ => True. *)
-Lemma R_phi_live_all : forall phi locs locs',
-  R_phi phi locs locs' <-> R_phi_live phi (fun _ => True) locs locs'.
-Proof.
-  intros phi locs locs'. split.
-  - intros H i Hi _. exact (H i Hi).
-  - intros H i Hi. exact (H i Hi I).
-Qed.
-
 (* The corrected Hset.  Under the unrestricted R_phi this statement is FALSE
    for a merging phi; restricted to live locals it is provable, given the
    condition the coalescing is meant to guarantee: after writing i', no other
@@ -235,27 +225,6 @@ Qed.
 Lemma slot_bound_empty : forall pc n, (pc <= n)%N -> slot_bound pc n empty = n.
 Proof.
   intros pc n H. unfold slot_bound. rewrite slot_bound_aux_empty. lia.
-Qed.
-
-(* When the guard rejects a function, the pass is the identity on it:
-   the map is empty, so no index is renamed and the bound is n, which
-   keeps every declared local.  The only hypothesis is the arity
-   discipline the pass is called under -- n counts the parameters plus
-   the declared locals -- without which "keep n - pc of them" would not
-   be the whole vector.  This is what makes a rejected input (a local
-   read before it is written, or a body that both branches and writes)
-   safe. *)
-Theorem coalesce_func_rejected_id : forall tys pc n f,
-  n = (pc + N.of_nat (length f.(modfunc_locals)))%N ->
-  coalescable pc n (modfunc_body f) = false -> coalesce_func tys pc n f = f.
-Proof.
-  intros tys pc n f Hn H. unfold coalesce_func.
-  rewrite (compute_phi_rejected tys pc n (modfunc_body f) H).
-  rewrite map_apply_phi_empty_id.
-  rewrite (slot_bound_empty pc n ltac:(lia)).
-  replace (N.to_nat (n - pc)) with (length f.(modfunc_locals)) by lia.
-  rewrite firstn_all.
-  destruct f; reflexivity.
 Qed.
 
 (* The same one level up, and for the same reason: a module the
@@ -711,12 +680,6 @@ Proof.
   [ left | right ]; exact H.
 Qed.
 
-Lemma body_ok_nowrite : forall bs, bs_writes bs = false -> body_ok bs.
-Proof. intros bs H. right. exact H. Qed.
-
-Lemma body_ok_nobr : forall bs, bs_br bs = false -> body_ok bs.
-Proof. intros bs H. left. exact H. Qed.
-
 Inductive rel_b : local_map -> (N -> Prop) -> basic_instruction -> basic_instruction -> Prop :=
 | relb_plain : forall phi K b, plain_b b = true -> rel_b phi K b b
 | relb_get : forall phi K i,
@@ -938,48 +901,6 @@ Qed.
 Scheme rel_bs_agnostic_ind := Induction for rel_bs Sort Prop
   with rel_b_agnostic_ind := Induction for rel_b Sort Prop.
 
-Lemma rel_bs_agnostic : forall phi K K' bs bs_o,
-  bs_writes bs = false -> rel_bs phi K bs bs_o -> rel_bs phi K' bs bs_o.
-Proof.
-  intros phi K K' bs bs_o Hw H.
-  revert K' Hw.
-  induction H using rel_bs_agnostic_ind with
-    (P := fun phi K bs bs_o H => forall K', bs_writes bs = false -> rel_bs phi K' bs bs_o)
-    (P0 := fun phi K b b_o H => forall K', bs_writes [b] = false -> rel_b phi K' b b_o).
-  - intros K' _. apply relbs_nil.
-  - intros K0 Hw'.
-    apply relbs_cons.
-    + apply IHrel_bs.
-      cbn [bs_writes] in Hw'. apply Bool.orb_false_iff in Hw'.
-      cbn [bs_writes]. rewrite (proj1 Hw'). reflexivity.
-    + apply IHrel_bs0.
-      cbn [bs_writes] in Hw'. apply Bool.orb_false_iff in Hw'.
-      destruct Hw' as [_ Ht]. exact Ht.
-  - intros K0 _. apply relb_plain. assumption.
-  - intros K0 _. apply relb_get.
-  - intros K0 Hhb. cbn [bs_writes bi_writes] in Hhb. discriminate.
-  - intros K0 Hhb. cbn [bs_writes bi_writes] in Hhb. discriminate.
-  - intros K0 Hhb.
-    apply relb_block; [ assumption |].
-    apply IHrel_bs.
-    cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb.
-    rewrite bi_writes_block in Hhb. apply (proj1 Hhb).
-  - intros K0 Hhb.
-    apply relb_loop; [ assumption |].
-    apply IHrel_bs.
-    cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb.
-    rewrite bi_writes_loop in Hhb. apply (proj1 Hhb).
-  - intros K0 Hhb.
-    apply relb_if; try assumption.
-    + apply IHrel_bs1.
-      apply Bool.orb_false_iff in Hhb as [H1 _].
-      apply Bool.orb_false_iff in H1 as [H1 _]. exact H1.
-    + apply IHrel_bs2.
-      cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb as [H1 _].
-      rewrite bi_writes_if in H1. apply Bool.orb_false_iff in H1 as [_ H2].
-      exact H2.
-Qed.
-
 Lemma rel_e_weaken : forall phi K e e_o, rel_e phi K e e_o ->
   forall K', (forall i, K' i -> K i) -> rel_e phi K' e e_o
 with rel_es_weaken : forall phi K es es_o, rel_es phi K es es_o ->
@@ -1084,22 +1005,6 @@ Proof.
   destruct vr; simpl; split; reflexivity.
 Qed.
 
-Lemma live_v_to_e_list : forall i vs,
-  es_live_b i (v_to_e_list vs) = false /\ es_kills_b i (v_to_e_list vs) = false.
-Proof.
-  intros i vs. induction vs as [|v vs' IH]; simpl; [ split; reflexivity |].
-  destruct IH as [H1 H2]. destruct (live_v_to_e i v) as [Ha Hb].
-  rewrite Ha. rewrite Hb. rewrite H1. rewrite H2. split; reflexivity.
-Qed.
-
-Lemma live_ext_v_to_e_list : forall vs K i, live_ext (v_to_e_list vs) K i <-> K i.
-Proof.
-  intros vs K i. unfold live_ext.
-  destruct (live_v_to_e_list i vs) as [H1 H2]. rewrite H1. rewrite H2. split.
-  - intros [Habs | [_ H]]; [ discriminate Habs | exact H ].
-  - intros H. right. split; [reflexivity | exact H].
-Qed.
-
 Lemma rel_e_v_to_e : forall phi K v, rel_e phi K (v_to_e v) (v_to_e v).
 Proof.
   intros phi K v. destruct v as [n | vv | vr]; simpl.
@@ -1161,15 +1066,6 @@ Lemma slot_free_empty : forall K i', slot_free empty K i'.
 Proof.
   intros K i' j Hj Hne Habs.
   rewrite ! apply_phi_local_empty in Habs. exact (Hne Habs).
-Qed.
-
-Lemma rel_bs_refl_aux : forall bs,
-  Forall (fun b => forall K, rel_b empty K b b) bs ->
-  forall K, rel_bs empty K bs bs.
-Proof.
-  intros bs H. induction H as [| x xs Hx Hxs IH]; intros K.
-  - apply relbs_nil.
-  - apply relbs_cons; [ apply Hx | apply IH ].
 Qed.
 
 (* Reflexivity.  The only structural condition left is on loop bodies, per
@@ -1353,10 +1249,6 @@ Definition ai_plain (e : administrative_instruction) : bool :=
 Definition es_plain (es : list administrative_instruction) : bool :=
   forallb ai_plain es.
 
-Lemma es_plain_cons : forall e es,
-  es_plain (e :: es) = ai_plain e && es_plain es.
-Proof. reflexivity. Qed.
-
 Lemma es_plain_app : forall es1 es2,
   es_plain es1 = true -> es_plain es2 = true -> es_plain (es1 ++ es2) = true.
 Proof.
@@ -1410,16 +1302,6 @@ Definition ai_neutral (e : administrative_instruction) : bool :=
 
 Definition es_neutral (es : list administrative_instruction) : bool :=
   forallb ai_neutral es.
-
-Lemma ai_neutral_plain : forall e, ai_neutral e = true -> ai_plain e = true.
-Proof. intros e H. destruct e; simpl in *; first [ reflexivity | assumption ]. Qed.
-
-Lemma es_neutral_plain : forall es, es_neutral es = true -> es_plain es = true.
-Proof.
-  intros es. induction es as [|e es' IH]; intros H; simpl in *; [reflexivity |].
-  apply Bool.andb_true_iff in H. destruct H as [H1 H2].
-  rewrite (ai_neutral_plain e H1). simpl. exact (IH H2).
-Qed.
 
 Lemma ai_neutral_live : forall i e,
   ai_neutral e = true -> ai_live i e = false /\ ai_kills i e = false.
@@ -1861,33 +1743,6 @@ Proof.
   destruct vr; reflexivity.
 Qed.
 
-(* Filling adds exactly the hole's writes to the context's own.  Both
-   directions of the nesting condition follow from this one equation. *)
-Lemma es_writes_lfill : forall k (lh : lholed k) X,
-  es_writes (lfill lh X) = lh_writes lh || es_writes X.
-Proof.
-  intros k lh. induction lh as [vs es' | k vs n es' lh IH es'']; intros X; simpl.
-  - rewrite ! es_writes_app. rewrite es_writes_v_to_e_list.
-    destruct (es_writes X), (es_writes es'); reflexivity.
-  - rewrite ! es_writes_app. rewrite es_writes_v_to_e_list.
-    cbn [es_writes]. rewrite ai_writes_label. rewrite IH.
-    destruct (es_writes es'), (lh_writes lh), (es_writes X), (es_writes es'');
-    reflexivity.
-Qed.
-
-Lemma lfill_nowrite : forall k (lh : lholed k) X,
-  lh_writes lh = false -> es_writes X = false -> es_writes (lfill lh X) = false.
-Proof.
-  intros k lh X H1 H2. rewrite es_writes_lfill. rewrite H1. rewrite H2. reflexivity.
-Qed.
-
-Lemma lfill_nowrite_inv : forall k (lh : lholed k) X,
-  es_writes (lfill lh X) = false -> lh_writes lh = false /\ es_writes X = false.
-Proof.
-  intros k lh X H. rewrite es_writes_lfill in H.
-  apply Bool.orb_false_iff in H. exact H.
-Qed.
-
 (* The same for branches. *)
 Fixpoint lh_br {k} (lh : lholed k) : bool :=
   match lh with
@@ -1947,11 +1802,6 @@ Proof.
     cbn [es_hazard]. rewrite ai_hazard_label. rewrite IH.
     destruct (es_hazard es'), (lh_hazard lh), (es_hazard X), (es_hazard es'');
     reflexivity.
-Qed.
-
-Lemma es_kills_v_to_e_list : forall i vs, es_kills_b i (v_to_e_list vs) = false.
-Proof.
-  intros i vs. destruct (live_v_to_e_list i vs) as [_ H]. exact H.
 Qed.
 
 (* The label_ok obligations a context imposes, once its hole is filled.
@@ -2396,14 +2246,6 @@ Ltac nowrite_simp Hw :=
   try reflexivity; try assumption; try discriminate Hw;
   try (solve [ apply const_list_nowrite; assumption ]).
 
-Lemma reduce_simple_nowrite : forall es es',
-  reduce_simple es es' -> es_writes es = false -> es_writes es' = false.
-Proof.
-  intros es es' H. induction H; intros Hw; nowrite_simp Hw.
-  (* rs_br: the branch continuation and the values are both write-free *)
-  rewrite (const_list_nowrite vs H). rewrite H2. reflexivity.
-Qed.
-
 (* [store_guarded] is in toplevel_spec.v, since it survives all the way into
    the statement of the top-level theorem.  Callee bodies come from the
    store, so the nesting restriction has to hold there too: r_invoke_native
@@ -2416,24 +2258,6 @@ Lemma frames_agree_sub : forall phi K K' f f_o,
   (forall i, K' i -> K i) ->
   frames_agree phi K f f_o -> frames_agree phi K' f f_o.
 Proof. exact frames_agree_mono. Qed.
-
-Lemma reduce_nowrite : forall hs s f es hs' s' f' es',
-  reduce hs s f es hs' s' f' es' -> es_writes es = false -> es_writes es' = false.
-Proof.
-  intros hs s f es hs' s' f' es' H. induction H; intros Hw; nowrite_simp Hw.
-  - eapply reduce_simple_nowrite; eassumption.
-  - (* r_block: the body is the block's own, and vs are values *)
-    rewrite es_writes_cat. rewrite bs_writes_to_e_list.
-    rewrite H4. rewrite Hw. reflexivity.
-  - (* r_loop: likewise, plus the loop instruction in the continuation *)
-    rewrite es_writes_cons. rewrite es_writes_cat. rewrite bs_writes_to_e_list.
-    cbn [ai_writes es_writes]. rewrite bi_writes_loop.
-    rewrite H4. rewrite Hw. reflexivity.
-  - (* r_label: the context contributes the same writes either way *)
-    subst les les'. rewrite es_writes_lfill in Hw. rewrite es_writes_lfill.
-    apply Bool.orb_false_iff in Hw. destruct Hw as [Hlh Hes].
-    rewrite Hlh. rewrite (IHreduce Hes). reflexivity.
-Qed.
 
 (* Branch-freedom survives a step for the same reason write-freedom does:
    no rule builds a branch, they only move existing sub-lists around. *)
@@ -3485,16 +3309,6 @@ Qed.
 Lemma map_eq_nil_l : forall A B (f : A -> B) l, List.map f l = [] -> l = [].
 Proof. intros. destruct l; [reflexivity | discriminate H]. Qed.
 
-Lemma map_apply_phi_id : forall phi l,
-  (forall b, In b l -> apply_phi phi b = b) ->
-  List.map (apply_phi phi) l = l.
-Proof.
-  induction l as [|x r IH]; simpl; intros H.
-  - reflexivity.
-  - rewrite (H x (or_introl eq_refl)).
-    rewrite (IH (fun b Hb => H b (or_intror Hb))). reflexivity.
-Qed.
-
 Lemma const_list_in : forall l e, is_true (const_list l) -> In e l -> is_const e = true.
 Proof.
   intros l e H Hin.
@@ -3508,17 +3322,6 @@ Qed.
    IH.  Its statement is now proved admit-free below as
    coalesce_func_correct_body, a three-line corollary of the pointwise
    theorem coalesce_func_correct_ctx. *)
-
-(* Renamed from coalesce_module_correct, which it never was: the real
-   whole-module result is the theorem of that name in
-   toplevel_correct.v, and two constants cannot share it. *)
-Theorem apply_phi_module_funcs : forall phi m,
-  let m' := apply_phi_module phi m in
-  forall f, In f m.(mod_funcs) ->
-            In (apply_phi_func phi f) m'.(mod_funcs).
-Proof.
-  intros. subst m'. simpl. apply in_map. exact H.
-Qed.
 
 (* ══════════════════════════════════════════════════════════════════
    The pointwise (contextual) simulation.
@@ -4504,100 +4307,11 @@ Proof.
   - f_equal. exact IH.
 Qed.
 
-Theorem coalesce_func_correct_trans :
-  forall phi f hs hs' s s' f_src f_opt f_opt' es_opt',
-    f_inst f_src = f_inst f_opt ->
-    R_phi phi (f_locs f_src) (f_locs f_opt) ->
-    (forall i : N,
-       N.to_nat (apply_phi_local phi i) < length (f_locs f_opt) ->
-       N.to_nat i < length (f_locs f_src)) ->
-    (forall (v : value) (vd : value) (locs_src locs_opt : list value) (i i' : N),
-       apply_phi_local phi i' = i ->
-       N.to_nat i < length locs_opt ->
-       R_phi phi locs_src locs_opt ->
-       R_phi phi (seq.set_nth vd locs_src (N.to_nat i') v)
-                 (seq.set_nth vd locs_opt (N.to_nat i) v)) ->
-    reduce_trans
-      (hs, s, f_opt,
-       List.map AI_basic (List.map (apply_phi phi) (modfunc_body f)))
-      (hs', s', f_opt', es_opt') ->
-    exists f_src' es_src',
-      reduce_trans
-        (hs, s, f_src, List.map AI_basic (modfunc_body f))
-        (hs', s', f_src', es_src') /\
-      List.map (apply_phi_es phi) es_src' = es_opt' /\
-      R_phi phi (f_locs f_src') (f_locs f_opt').
-Proof.
-  intros phi f hs hs' s s' f_src f_opt f_opt' es_opt' Hinst Hphi Hlocal Hset Htrans.
-  assert (Hsim0 : sim_state phi
-            (hs, s, f_src, List.map AI_basic (modfunc_body f))
-            (hs, s, f_opt,
-             List.map AI_basic (List.map (apply_phi phi) (modfunc_body f)))).
-  { simpl. refine (conj eq_refl (conj eq_refl (conj _ _))).
-    - exact (conj Hinst (conj Hphi Hlocal)).
-    - apply map_apply_phi_es_AI_basic. }
-  destruct (coalesce_trans_ctx phi Hset _ _ Htrans _ Hsim0)
-    as [c_src' [Hred' Hsim']].
-  destruct c_src' as [[[hs2 s2] f_src'] es_src'].
-  destruct Hsim' as [Hhs2 [Hs2 [Hfr' Hmap']]]. subst hs2. subst s2.
-  exists f_src', es_src'. split; [| split].
-  - exact Hred'.
-  - exact Hmap'.
-  - destruct Hfr' as [_ [Hp _]]. exact Hp.
-Qed.
-
-(* ── The pass instantiated at its own phi ──────────────────────────
-   coalesce_func_correct_trans quantifies over an arbitrary phi, so on its
-   own it says nothing about the map the pass actually computes.  This
-   corollary pins phi to compute_phi's output and states the conclusion
-   about coalesce_func itself; modfunc_body (coalesce_func pc n f) is
-   convertible to List.map (apply_phi phi) (modfunc_body f).
-
-   CAVEAT.  The Hset premise is *not* discharged here, and it cannot be:
-   R_phi forces any two source locals sharing a target slot to hold equal
-   values (see the note on R_phi above), so Hset is false as soon as phi
-   merges two locals that ever differ.  This corollary therefore has real
-   content only when compute_phi returns an injective map -- in particular
-   when it rejects the function and returns `empty` (see
-   coalesce_func_rejected_id).  Making it bite for genuine coalescing
-   needs a weaker invariant, keyed on which local is live rather than on
-   all merged locals agreeing. *)
-Corollary coalesce_func_correct_compute_phi :
-  forall tys pc n f hs hs' s s' f_src f_opt f_opt' es_opt',
-    let phi := compute_phi tys pc n (modfunc_body f) in
-    f_inst f_src = f_inst f_opt ->
-    R_phi phi (f_locs f_src) (f_locs f_opt) ->
-    (forall i : N,
-       N.to_nat (apply_phi_local phi i) < length (f_locs f_opt) ->
-       N.to_nat i < length (f_locs f_src)) ->
-    (forall (v : value) (vd : value) (locs_src locs_opt : list value) (i i' : N),
-       apply_phi_local phi i' = i ->
-       N.to_nat i < length locs_opt ->
-       R_phi phi locs_src locs_opt ->
-       R_phi phi (seq.set_nth vd locs_src (N.to_nat i') v)
-                 (seq.set_nth vd locs_opt (N.to_nat i) v)) ->
-    reduce_trans
-      (hs, s, f_opt,
-       List.map AI_basic (modfunc_body (coalesce_func tys pc n f)))
-      (hs', s', f_opt', es_opt') ->
-    exists f_src' es_src',
-      reduce_trans
-        (hs, s, f_src, List.map AI_basic (modfunc_body f))
-        (hs', s', f_src', es_src') /\
-      List.map (apply_phi_es phi) es_src' = es_opt' /\
-      R_phi phi (f_locs f_src') (f_locs f_opt').
-Proof.
-  intros tys pc n f hs hs' s s' f_src f_opt f_opt' es_opt' phi
-         Hinst Hphi Hlocal Hset Hred.
-  eapply coalesce_func_correct_trans;
-    [ exact Hinst | exact Hphi | exact Hlocal | exact Hset | exact Hred ].
-Qed.
-
 (* ── The whole-body single-step statement, as a corollary of ctx ────
    The statement a direct induction cannot reach (it stalls at r_label --
    a whole-body IH cannot step the inner fragment of a label context).
    Derived from the pointwise theorem it is three lines and carries no
-   admits, so the two corollaries below are axiom-free as well. *)
+   admits. *)
 Theorem coalesce_func_correct_body :
   forall phi f hs hs' s s' f_src f_opt f_opt' es',
     f_inst f_src = f_inst f_opt ->
@@ -4632,71 +4346,12 @@ Proof.
   destruct Hfr' as [_ [Hp _]]. exact Hp.
 Qed.
 
-Theorem coalesce_func_correct_all : forall phi m f,
-    In f m.(mod_funcs) ->
-    forall hs hs' s s' f_src f_opt f_opt' es',
-      f_inst f_src = f_inst f_opt ->
-      R_phi phi (f_locs f_src) (f_locs f_opt) ->
-      (forall i : N,
-         N.to_nat (apply_phi_local phi i) < length (f_locs f_opt) ->
-         N.to_nat i < length (f_locs f_src)) ->
-      (forall (v : value) (vd : value) (locs_src locs_opt : list value) (i i' : N),
-         apply_phi_local phi i' = i ->
-         N.to_nat i < length locs_opt ->
-         R_phi phi locs_src locs_opt ->
-         R_phi phi (seq.set_nth vd locs_src (N.to_nat i') v)
-                   (seq.set_nth vd locs_opt (N.to_nat i) v)) ->
-      reduce hs s f_opt
-             (List.map AI_basic (List.map (apply_phi phi) f.(modfunc_body)))
-             hs' s' f_opt' es' ->
-      exists f_src' es0,
-        reduce hs s f_src (List.map AI_basic f.(modfunc_body))
-               hs' s' f_src' es0 /\
-        R_phi phi (f_locs f_src') (f_locs f_opt').
-Proof.
-  intros phi m f Hin hs hs' s s' f_src f_opt f_opt' es' Hinst Hphi Hlocal Hset Hred.
-  exact (coalesce_func_correct_body phi f hs hs' s s' f_src f_opt f_opt' es'
-           Hinst Hphi Hlocal Hset Hred).
-Qed.
-
-Theorem coalesce_func_correct_plain :
-  forall phi f hs hs' s s' f_src f_opt f_opt' es',
-    f_inst f_src = f_inst f_opt ->
-    R_phi phi (f_locs f_src) (f_locs f_opt) ->
-    (forall i : N,
-       N.to_nat (apply_phi_local phi i) < length (f_locs f_opt) ->
-       N.to_nat i < length (f_locs f_src)) ->
-    (forall (v : value) (vd : value) (locs_src locs_opt : list value) (i i' : N),
-       apply_phi_local phi i' = i ->
-       N.to_nat i < length locs_opt ->
-       R_phi phi locs_src locs_opt ->
-       R_phi phi (seq.set_nth vd locs_src (N.to_nat i') v)
-                 (seq.set_nth vd locs_opt (N.to_nat i) v)) ->
-    (forall b, In b (modfunc_body f) -> apply_phi phi b = b) ->
-    reduce hs s f_opt
-           (List.map AI_basic (modfunc_body f))
-           hs' s' f_opt' es' ->
-    exists f_src' es0,
-      reduce hs s f_src (List.map AI_basic (modfunc_body f))
-             hs' s' f_src' es0 /\
-      R_phi phi (f_locs f_src') (f_locs f_opt').
-Proof.
-  intros phi f hs hs' s s' f_src f_opt f_opt' es' Hinst Hphi Hlocal Hset Hfix Hred.
-  eapply coalesce_func_correct_body.
-  - exact Hinst.
-  - exact Hphi.
-  - exact Hlocal.
-  - exact Hset.
-  - rewrite (map_apply_phi_id phi (modfunc_body f) Hfix). exact Hred.
-Qed.
-
 (* ── Multi-step closure of the liveness-keyed simulation ───────────
    coalesce_trans_ctx above already closes a simulation under
    reduce_trans, but the one it closes is keyed on R_phi, which forces
    every pair of merged locals to hold equal values -- vacuous as soon
-   as the pass does anything (see the CAVEAT on
-   coalesce_func_correct_compute_phi).  sim_step is the simulation with
-   content; what follows closes *that* one.
+   as the pass does anything (see the note on R_phi above).  sim_step is
+   the simulation with content; what follows closes *that* one.
 
    The only thing that does not thread for free is store_guarded.
    sim_step needs it at every step, because r_invoke_native relates a

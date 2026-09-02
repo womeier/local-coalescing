@@ -82,17 +82,6 @@ Proof.
   destruct s_opt. reflexivity.
 Qed.
 
-(* Given a step that leaves the code alone, the successor stores are
-   related by construction. *)
-Lemma store_rel_step : forall s s_opt s',
-  store_rel s s_opt -> s_funcs s' = s_funcs s ->
-  store_rel s' (with_funcs s' (s_funcs s_opt)).
-Proof.
-  intros s s_opt s' [Hf Hvis] Heq. split.
-  - cbn [s_funcs]. rewrite Heq. exact Hf.
-  - repeat split; reflexivity.
-Qed.
-
 Ltac wf_proj := cbn [s_funcs s_tables s_mems s_globals s_elems s_datas] in *.
 
 Ltac with_funcs_solve :=
@@ -2165,7 +2154,7 @@ Proof.
 Qed.
 
 (* ── 8. The assembly ──────────────────────────────────────────────
-   Proved, not admitted: this is the statement in toplevel_spec.v, and
+   This is the statement in toplevel_spec.v, and
    it follows from the lemmas above by splitting on whether the pass
    accepts the module.  An unsupported module comes back untouched, so
    the two sides are literally the same run.  A supported one

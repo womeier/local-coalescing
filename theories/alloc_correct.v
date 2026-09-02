@@ -712,10 +712,6 @@ Lemma ws_loop_enter : forall b outer st,
   ws_loop (ws_enter b outer st) = ws_loop st.
 Proof. reflexivity. Qed.
 
-Lemma ws_loop_leave : forall outer st,
-  ws_loop (ws_leave outer st) = ws_loop outer.
-Proof. reflexivity. Qed.
-
 Lemma ws_loop_enter_loop : forall b outer st,
   ws_loop (ws_enter_loop b outer st)
     = Some (match ws_loop st with Some s => s | None => ws_pos st end).
@@ -2150,10 +2146,6 @@ Proof. reflexivity. Qed.
 Definition seen_all (pc n : N) (L : N -> Prop) (st : walk_state) : Prop :=
   forall j, L j -> (pc <= j)%N -> (j < n)%N -> seen_or_live j st.
 
-Lemma seen_all_mono : forall pc n L L' st,
-  (forall j, L' j -> L j) -> seen_all pc n L st -> seen_all pc n L' st.
-Proof. intros pc n L L' st Hsub H j Hj. apply H. apply Hsub. exact Hj. Qed.
-
 (* The flat step: an instruction hands back its stacks, and a local with
    no def after it had none before. *)
 Lemma seen_all_step : forall pc n L d st b,
@@ -3011,34 +3003,5 @@ Qed.
 Section Running.
 
 Context `{hfc : host_function_class} `{memory : BlockUpdateMemory} `{ho : host}.
-
-Theorem coalesce_func_trans :
-  forall types f hs s f_src f_opt hs' s' f_src' es',
-    host_keeps_funcs ->
-    store_guarded s ->
-    func_supported types f = true ->
-    coalescable (func_param_count types f.(modfunc_type))
-                (func_total_locals types f) f.(modfunc_body) = true ->
-    let phi := compute_phi (slot_types types f)
-                 (func_param_count types f.(modfunc_type))
-                 (func_total_locals types f) f.(modfunc_body) in
-    frames_agree phi (bs_live_ext f.(modfunc_body) (fun _ => False)) f_src f_opt ->
-    reduce_trans (hs, s, f_src, to_e_list f.(modfunc_body))
-                 (hs', s', f_src', es') ->
-    exists f_opt' es_o',
-      reduce_trans (hs, s, f_opt,
-                    to_e_list (coalesce_func_with_types types f).(modfunc_body))
-                   (hs', s', f_opt', es_o') /\
-      rel_es phi (fun _ => False) es' es_o' /\
-      frames_agree phi (live_ext es' (fun _ => False)) f_src' f_opt'.
-Proof.
-  intros types f hs s f_src f_opt hs' s' f_src' es' Hhost Hg Hs Hc phi Hfr Htrans.
-  eapply coalesce_body_trans.
-  - exact Hhost.
-  - exact Hg.
-  - apply coalesce_func_with_types_related; assumption.
-  - exact Hfr.
-  - exact Htrans.
-Qed.
 
 End Running.
