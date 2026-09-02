@@ -289,62 +289,8 @@ Qed.
    are treated as *not* killing (a branch may skip the write), so the
    live set is an over-approximation, which is what soundness needs. *)
 
-Definition bi_kills (i : N) (b : basic_instruction) : bool :=
-  match b with
-  | BI_local_set j => N.eqb i j
-  | BI_local_tee j => N.eqb i j
-  | _ => false
-  end.
-
-(* The list recursion is inlined as a local fix rather than written as a
-   mutual Fixpoint: Rocq's guard checker rejects mutual recursion that
-   alternates between a type and lists of it.  bi_live_block / _loop / _if
-   below recover the equations one would have written directly. *)
-Fixpoint bi_live (i : N) (b : basic_instruction) {struct b} : bool :=
-  let fix bsl (bs : list basic_instruction) : bool :=
-    match bs with
-    | [] => false
-    | b' :: rest => bi_live i b' || (negb (bi_kills i b') && bsl rest)
-    end in
-  match b with
-  | BI_local_get j => N.eqb i j
-  | BI_block _ bs => bsl bs
-  | BI_loop _ bs => bsl bs
-  | BI_if _ b1 b2 => bsl b1 || bsl b2
-  | _ => false
-  end.
-
-Fixpoint bs_live_b (i : N) (bs : list basic_instruction) : bool :=
-  match bs with
-  | [] => false
-  | b :: rest => bi_live i b || (negb (bi_kills i b) && bs_live_b i rest)
-  end.
-
-Lemma bi_live_block : forall i bt bs, bi_live i (BI_block bt bs) = bs_live_b i bs.
-Proof.
-  intros i bt bs. induction bs as [|b rest IH]; simpl; [reflexivity |].
-  simpl in IH. rewrite IH. reflexivity.
-Qed.
-
-Lemma bi_live_loop : forall i bt bs, bi_live i (BI_loop bt bs) = bs_live_b i bs.
-Proof.
-  intros i bt bs. induction bs as [|b rest IH]; simpl; [reflexivity |].
-  simpl in IH. rewrite IH. reflexivity.
-Qed.
-
-Lemma bi_live_if : forall i bt b1 b2,
-  bi_live i (BI_if bt b1 b2) = bs_live_b i b1 || bs_live_b i b2.
-Proof.
-  intros i bt b1 b2.
-  rewrite <- (bi_live_block i bt b1). rewrite <- (bi_live_block i bt b2).
-  reflexivity.
-Qed.
-
-Fixpoint bs_kills_b (i : N) (bs : list basic_instruction) : bool :=
-  match bs with
-  | [] => false
-  | b :: rest => bi_kills i b || bs_kills_b i rest
-  end.
+(* bi_kills / bi_live / bs_live_b / bs_kills_b now live in
+   coalesce_locals.v: the walk itself consults them. *)
 
 (* A trap kills everything.  Nothing after it runs, so no read of any local
    can follow -- which is what makes rs_trap work: that rule throws the
@@ -982,6 +928,56 @@ Proof.
       + eapply rel_b_weaken; [ eassumption |].
         intros i Hi. eapply bs_live_ext_mono; eassumption.
       + eapply rel_bs_weaken; eassumption. }
+Qed.
+
+(* A body whose hazard-freedom forces write-freedom can be related under
+   any live set: its slot_free obligations (carried only by local.set and
+   local.tee) never arise, so K is inert.  This is what lets the loop
+   step re-tag a write-free loop body with the label's own live set after
+   relb_loop has dropped the bs_live_b disjunct. *)
+Scheme rel_bs_agnostic_ind := Induction for rel_bs Sort Prop
+  with rel_b_agnostic_ind := Induction for rel_b Sort Prop.
+
+Lemma rel_bs_agnostic : forall phi K K' bs bs_o,
+  bs_writes bs = false -> rel_bs phi K bs bs_o -> rel_bs phi K' bs bs_o.
+Proof.
+  intros phi K K' bs bs_o Hw H.
+  revert K' Hw.
+  induction H using rel_bs_agnostic_ind with
+    (P := fun phi K bs bs_o H => forall K', bs_writes bs = false -> rel_bs phi K' bs bs_o)
+    (P0 := fun phi K b b_o H => forall K', bs_writes [b] = false -> rel_b phi K' b b_o).
+  - intros K' _. apply relbs_nil.
+  - intros K0 Hw'.
+    apply relbs_cons.
+    + apply IHrel_bs.
+      cbn [bs_writes] in Hw'. apply Bool.orb_false_iff in Hw'.
+      cbn [bs_writes]. rewrite (proj1 Hw'). reflexivity.
+    + apply IHrel_bs0.
+      cbn [bs_writes] in Hw'. apply Bool.orb_false_iff in Hw'.
+      destruct Hw' as [_ Ht]. exact Ht.
+  - intros K0 _. apply relb_plain. assumption.
+  - intros K0 _. apply relb_get.
+  - intros K0 Hhb. cbn [bs_writes bi_writes] in Hhb. discriminate.
+  - intros K0 Hhb. cbn [bs_writes bi_writes] in Hhb. discriminate.
+  - intros K0 Hhb.
+    apply relb_block; [ assumption |].
+    apply IHrel_bs.
+    cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb.
+    rewrite bi_writes_block in Hhb. apply (proj1 Hhb).
+  - intros K0 Hhb.
+    apply relb_loop; [ assumption |].
+    apply IHrel_bs.
+    cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb.
+    rewrite bi_writes_loop in Hhb. apply (proj1 Hhb).
+  - intros K0 Hhb.
+    apply relb_if; try assumption.
+    + apply IHrel_bs1.
+      apply Bool.orb_false_iff in Hhb as [H1 _].
+      apply Bool.orb_false_iff in H1 as [H1 _]. exact H1.
+    + apply IHrel_bs2.
+      cbn [bs_writes] in Hhb. apply Bool.orb_false_iff in Hhb as [H1 _].
+      rewrite bi_writes_if in H1. apply Bool.orb_false_iff in H1 as [_ H2].
+      exact H2.
 Qed.
 
 Lemma rel_e_weaken : forall phi K e e_o, rel_e phi K e e_o ->

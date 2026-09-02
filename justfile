@@ -52,12 +52,12 @@ regress: build
     #!/usr/bin/env bash
     set -euo pipefail
     cd examples/regression
-    for f in ssa nonssa loop branch types; do
+    for f in ssa nonssa loop branch types arms shadow loopdef; do
       dune exec ../../src/main.exe -- $f.wasm $f.opt.wasm > /dev/null
       wasm-tools validate $f.opt.wasm || { echo "  $f: OUTPUT INVALID"; exit 1; }
       echo "  $f: output validates"
     done
-    for f in ssa branch; do node equiv.js $f.wasm $f.opt.wasm; done
+    for f in ssa branch arms shadow loopdef; do node equiv.js $f.wasm $f.opt.wasm; done
     echo "regression cases OK"
 
 # What the top-level theorem actually rests on.  This, not grepping for
