@@ -235,13 +235,18 @@ Record walk_state := mk_ws {
   ws_self  : list (list basic_instruction);
                         (* the lists enclosing the body being walked,
                            innermost first *)
-  ws_encl  : list basic_instruction
+  ws_encl  : list basic_instruction;
                         (* the list the current instruction is in *)
+  ws_loop  : option nat
+                        (* the position at which the body of the
+                           *outermost* enclosing loop begins, if the walk
+                           is inside a loop at all *)
 }.
 
 Definition ws_stacks (self : list (list basic_instruction))
-  (encl : list basic_instruction) (st : walk_state) : walk_state :=
-  mk_ws st.(ws_pos) st.(ws_defs) st.(ws_uses) st.(ws_ok) self encl.
+  (encl : list basic_instruction) (lp : option nat)
+  (st : walk_state) : walk_state :=
+  mk_ws st.(ws_pos) st.(ws_defs) st.(ws_uses) st.(ws_ok) self encl lp.
 
 (* The walk carries the structured-control nesting `depth`, but only its
    zero-ness matters: it decides where a local's live interval *starts*.
@@ -285,7 +290,18 @@ Definition ws_stacks (self : list (list basic_instruction))
 
    The test is [stack_read], not [stack_live]: see its definition above
    for why a kill in an enclosing list must not shadow a read outside
-   it. *)
+   it.
+
+   A def inside a *loop* body cannot be confined to its own position even
+   when the local is dead outside the loop, and that is what [ws_loop]
+   records.  A local the body reads is read again on every iteration, so
+   its last recorded use says nothing beyond the body's first position --
+   a write further down the body would get a disjoint interval and could
+   take its slot, and the second iteration would then read the wrong
+   value.  So a first def under a loop opens at the start of the body of
+   the *outermost* enclosing loop, which is at or before every such read.
+   That is still far tighter than opening at 0, and on examples/sha.wasm
+   it costs nothing: see examples/regression/loopdef.wat. *)
 Fixpoint walk_instr
   (param_count n : N)
   (depth : nat)
@@ -293,7 +309,7 @@ Fixpoint walk_instr
   (i : basic_instruction) : walk_state :=
   let pos     := st.(ws_pos) in
   let st_base := mk_ws (pos + 1) st.(ws_defs) st.(ws_uses) st.(ws_ok)
-                       st.(ws_self) st.(ws_encl) in
+                       st.(ws_self) st.(ws_encl) st.(ws_loop) in
   let walk_list d a instrs :=
     List.fold_left (fun a' i' => walk_instr param_count n d a' i')
                    instrs a in
@@ -301,9 +317,16 @@ Fixpoint walk_instr
   let body_guard b st' :=
     if body_ok_b b then st'
     else mk_ws st'.(ws_pos) st'.(ws_defs) st'.(ws_uses) false
-               st'.(ws_self) st'.(ws_encl) in
-  let enter b st' := ws_stacks (st.(ws_encl) :: st.(ws_self)) b st' in
-  let leave st'   := ws_stacks st.(ws_self) st.(ws_encl) st' in
+               st'.(ws_self) st'.(ws_encl) st'.(ws_loop) in
+  let enter b st' := ws_stacks (st.(ws_encl) :: st.(ws_self)) b st'.(ws_loop) st' in
+  (* a loop body records where the outermost enclosing loop begins *)
+  let enter_loop b st' :=
+    ws_stacks (st.(ws_encl) :: st.(ws_self)) b
+              (Some (match st'.(ws_loop) with
+                     | Some s => s
+                     | None => st'.(ws_pos)
+                     end)) st' in
+  let leave st'   := ws_stacks st.(ws_self) st.(ws_encl) st.(ws_loop) st' in
   let def_instr idx :=
     if N.ltb idx param_count then st_base
     else if N.ltb idx n then
@@ -313,12 +336,15 @@ Fixpoint walk_instr
         | None   => if Nat.eqb depth 0 then pos      (* dominating def     *)
                     else if stack_read idx st.(ws_self) then 0
                                                      (* read outside: entry *)
-                    else pos                         (* dead outside it     *)
+                    else match st.(ws_loop) with
+                         | Some s => s               (* re-run: loop entry  *)
+                         | None => pos               (* dead outside it     *)
+                         end
         end in
       mk_ws (pos + 1)
             (M.add idx start st.(ws_defs))
             (M.add idx pos   st.(ws_uses))           (* a write is a touch  *)
-            st.(ws_ok) st.(ws_self) st.(ws_encl)
+            st.(ws_ok) st.(ws_self) st.(ws_encl) st.(ws_loop)
     else st_base in
   match i with
   | BI_local_get idx =>
@@ -327,17 +353,17 @@ Fixpoint walk_instr
       if M.mem idx st.(ws_defs) then                 (* use after def *)
         mk_ws (pos + 1) st.(ws_defs)
               (M.add idx pos st.(ws_uses)) st.(ws_ok)
-              st.(ws_self) st.(ws_encl)
+              st.(ws_self) st.(ws_encl) st.(ws_loop)
       else                                           (* use before def *)
         mk_ws (pos + 1) st.(ws_defs) st.(ws_uses) false
-              st.(ws_self) st.(ws_encl)
+              st.(ws_self) st.(ws_encl) st.(ws_loop)
     else st_base
 
   | BI_local_set idx => def_instr idx
   | BI_local_tee idx => def_instr idx
 
   | BI_block _ b    => leave (walk_list (S depth) (enter b (body_guard b st_base)) b)
-  | BI_loop _ b     => leave (walk_list (S depth) (enter b (body_guard b st_base)) b)
+  | BI_loop _ b     => leave (walk_list (S depth) (enter_loop b (body_guard b st_base)) b)
   | BI_if _ b1 b2   => let st0 := body_guard b2 (body_guard b1 st_base) in
                        let st1 := walk_list (S depth) (enter b1 st0) b1 in
                        leave (walk_list (S depth) (enter b2 st1) b2)
@@ -348,7 +374,7 @@ Definition walk_func
   (param_count n : N)
   (body : list basic_instruction) : walk_state :=
   List.fold_left (fun a i => walk_instr param_count n 0 a i)
-                 body (mk_ws 0 (M.empty nat) (M.empty nat) true [] body).
+                 body (mk_ws 0 (M.empty nat) (M.empty nat) true [] body None).
 
 Definition coalescable
   (param_count n : N)
