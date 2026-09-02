@@ -27,6 +27,12 @@
 
         mcp = import ./mcp.nix { inherit pkgs lib; };
 
+        # Typst with lilaq vendored in, so the evaluation figure builds without network access.
+        typstEnv = pkgs.typst.wrapper {
+          packages = ps: [ ps.lilaq_0_6_0 ];
+          fonts = [ "${pkgs.lmodern}/share/fonts" ];
+        };
+
         wasmcert-master = coqPackages.wasmcert.overrideAttrs (old: {
           version = "master";
           src = pkgs.fetchFromGitHub {
@@ -61,6 +67,24 @@
         packages.rocq-mcp = mcp.rocq-mcp;
         packages.rocq-mcp-wheelhouse = mcp.rocq-mcp-wheelhouse;
         packages.pytanque = mcp.pytanque;
+        packages.figure = pkgs.stdenv.mkDerivation {
+          pname = "figure";
+          name = "figure";
+          src = ./evaluation;
+          buildInputs = [
+            typstEnv
+            pkgs.git
+            pkgs.gnumake
+          ];
+          buildPhase = ''
+            export HOME=$TMPDIR
+            make build
+          '';
+          installPhase = ''
+            mkdir -p $out/
+            cp ./figure.png $out/
+          '';
+        };
         devShells.default = pkgs.mkShell {
           name = "wasm-opt-cert";
           packages = [
@@ -79,6 +103,10 @@
             # and `just sha_check` drives examples/compare_output.py.
             pkgs.nodejs
             pkgs.python3
+            pkgs.python3Packages.click
+            pkgs.python3Packages.tqdm
+            pkgs.typst
+            pkgs.gnumake
             ocaml
             rocq-core.ocamlPackages.findlib
             mcp.rocq-mcp
