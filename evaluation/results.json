@@ -1,0 +1,464 @@
+{
+  "engine": "Node.js (v24.19.0)",
+  "runs": 10,
+  "warmup": 3,
+  "programs": [
+    "demo1",
+    "demo2",
+    "list_sum",
+    "vs_easy",
+    "vs_hard",
+    "binom",
+    "color",
+    "sha_fast",
+    "even_10000",
+    "ack_3_9",
+    "sm_gauss_nat",
+    "sm_gauss_N",
+    "sm_gauss_PrimInt"
+  ],
+  "variants": [
+    {
+      "folder": "before",
+      "description": "local coalescing not applied"
+    },
+    {
+      "folder": "before-O2",
+      "description": "wasm-opt -O2 applied to before/"
+    },
+    {
+      "folder": "before-cl",
+      "description": "wasm-opt --coalesce-locals on before/"
+    },
+    {
+      "folder": "after",
+      "description": "local coalescing applied"
+    }
+  ],
+  "results": {
+    "before": {
+      "demo1": {
+        "time_startup": 1,
+        "time_main": 1,
+        "time_pp": 6,
+        "sum": 2,
+        "bytes_used": 22,
+        "binary_size_in_kb": 38
+      },
+      "demo2": {
+        "time_startup": 0,
+        "time_main": 0,
+        "time_pp": 2,
+        "sum": 0,
+        "bytes_used": 5,
+        "binary_size_in_kb": 10
+      },
+      "list_sum": {
+        "time_startup": 1,
+        "time_main": 0,
+        "time_pp": 0,
+        "sum": 1,
+        "bytes_used": 43,
+        "binary_size_in_kb": 11
+      },
+      "vs_easy": {
+        "time_startup": 3,
+        "time_main": 14,
+        "time_pp": 0,
+        "sum": 17,
+        "bytes_used": 6128,
+        "binary_size_in_kb": 188
+      },
+      "vs_hard": {
+        "time_startup": 2,
+        "time_main": 61,
+        "time_pp": 0,
+        "sum": 63,
+        "bytes_used": 38141,
+        "binary_size_in_kb": 188
+      },
+      "binom": {
+        "time_startup": 1,
+        "time_main": 14,
+        "time_pp": 8,
+        "sum": 15,
+        "bytes_used": 248,
+        "binary_size_in_kb": 176
+      },
+      "color": {
+        "time_startup": 4,
+        "time_main": 183,
+        "time_pp": 0,
+        "sum": 187,
+        "bytes_used": 16515,
+        "binary_size_in_kb": 907
+      },
+      "sha_fast": {
+        "time_startup": 2,
+        "time_main": 60,
+        "time_pp": 2,
+        "sum": 62,
+        "bytes_used": 25642,
+        "binary_size_in_kb": 337
+      },
+      "even_10000": {
+        "time_startup": 0,
+        "time_main": 0,
+        "time_pp": 0,
+        "sum": 0,
+        "bytes_used": 89,
+        "binary_size_in_kb": 31
+      },
+      "ack_3_9": {
+        "time_startup": 1,
+        "time_main": 71,
+        "time_pp": 13,
+        "sum": 72,
+        "bytes_used": 44673,
+        "binary_size_in_kb": 6
+      },
+      "sm_gauss_nat": {
+        "time_startup": 1,
+        "time_main": 36,
+        "time_pp": 0,
+        "sum": 37,
+        "bytes_used": 28140,
+        "binary_size_in_kb": 52
+      },
+      "sm_gauss_N": {
+        "time_startup": 1,
+        "time_main": 15,
+        "time_pp": 0,
+        "sum": 16,
+        "bytes_used": 12248,
+        "binary_size_in_kb": 21
+      },
+      "sm_gauss_PrimInt": {
+        "time_startup": 1,
+        "time_main": 14,
+        "time_pp": 0,
+        "sum": 15,
+        "bytes_used": 12144,
+        "binary_size_in_kb": 16
+      }
+    },
+    "before-O2": {
+      "demo1": {
+        "time_startup": 1,
+        "time_main": 0,
+        "time_pp": 6,
+        "sum": 1,
+        "bytes_used": 22,
+        "binary_size_in_kb": 31
+      },
+      "demo2": {
+        "time_startup": 0,
+        "time_main": 0,
+        "time_pp": 2,
+        "sum": 0,
+        "bytes_used": 5,
+        "binary_size_in_kb": 4
+      },
+      "list_sum": {
+        "time_startup": 0,
+        "time_main": 0,
+        "time_pp": 0,
+        "sum": 0,
+        "bytes_used": 43,
+        "binary_size_in_kb": 5
+      },
+      "vs_easy": {
+        "time_startup": 1,
+        "time_main": 13,
+        "time_pp": 0,
+        "sum": 14,
+        "bytes_used": 6128,
+        "binary_size_in_kb": 164
+      },
+      "vs_hard": {
+        "time_startup": 2,
+        "time_main": 51,
+        "time_pp": 0,
+        "sum": 53,
+        "bytes_used": 38141,
+        "binary_size_in_kb": 164
+      },
+      "binom": {
+        "time_startup": 1,
+        "time_main": 5,
+        "time_pp": 7,
+        "sum": 6,
+        "bytes_used": 248,
+        "binary_size_in_kb": 162
+      },
+      "color": {
+        "time_startup": 4,
+        "time_main": 34,
+        "time_pp": 0,
+        "sum": 38,
+        "bytes_used": 16515,
+        "binary_size_in_kb": 817
+      },
+      "sha_fast": {
+        "time_startup": 2,
+        "time_main": 38,
+        "time_pp": 2,
+        "sum": 40,
+        "bytes_used": 25642,
+        "binary_size_in_kb": 286
+      },
+      "even_10000": {
+        "time_startup": 0,
+        "time_main": 0,
+        "time_pp": 0,
+        "sum": 0,
+        "bytes_used": 89,
+        "binary_size_in_kb": 23
+      },
+      "ack_3_9": {
+        "time_startup": 1,
+        "time_main": 59,
+        "time_pp": 13,
+        "sum": 60,
+        "bytes_used": 44673,
+        "binary_size_in_kb": 0
+      },
+      "sm_gauss_nat": {
+        "time_startup": 1,
+        "time_main": 25,
+        "time_pp": 0,
+        "sum": 26,
+        "bytes_used": 28140,
+        "binary_size_in_kb": 44
+      },
+      "sm_gauss_N": {
+        "time_startup": 1,
+        "time_main": 13,
+        "time_pp": 0,
+        "sum": 14,
+        "bytes_used": 12248,
+        "binary_size_in_kb": 13
+      },
+      "sm_gauss_PrimInt": {
+        "time_startup": 0,
+        "time_main": 10,
+        "time_pp": 0,
+        "sum": 10,
+        "bytes_used": 12144,
+        "binary_size_in_kb": 9
+      }
+    },
+    "before-cl": {
+      "demo1": {
+        "time_startup": 1,
+        "time_main": 0,
+        "time_pp": 6,
+        "sum": 1,
+        "bytes_used": 22,
+        "binary_size_in_kb": 31
+      },
+      "demo2": {
+        "time_startup": 1,
+        "time_main": 0,
+        "time_pp": 2,
+        "sum": 1,
+        "bytes_used": 5,
+        "binary_size_in_kb": 4
+      },
+      "list_sum": {
+        "time_startup": 1,
+        "time_main": 0,
+        "time_pp": 0,
+        "sum": 1,
+        "bytes_used": 43,
+        "binary_size_in_kb": 6
+      },
+      "vs_easy": {
+        "time_startup": 1,
+        "time_main": 13,
+        "time_pp": 0,
+        "sum": 14,
+        "bytes_used": 6128,
+        "binary_size_in_kb": 181
+      },
+      "vs_hard": {
+        "time_startup": 2,
+        "time_main": 60,
+        "time_pp": 0,
+        "sum": 62,
+        "bytes_used": 38141,
+        "binary_size_in_kb": 181
+      },
+      "binom": {
+        "time_startup": 1,
+        "time_main": 8,
+        "time_pp": 8,
+        "sum": 9,
+        "bytes_used": 248,
+        "binary_size_in_kb": 163
+      },
+      "color": {
+        "time_startup": 4,
+        "time_main": 36,
+        "time_pp": 0,
+        "sum": 40,
+        "bytes_used": 16515,
+        "binary_size_in_kb": 836
+      },
+      "sha_fast": {
+        "time_startup": 2,
+        "time_main": 44,
+        "time_pp": 2,
+        "sum": 46,
+        "bytes_used": 25642,
+        "binary_size_in_kb": 323
+      },
+      "even_10000": {
+        "time_startup": 1,
+        "time_main": 0,
+        "time_pp": 0,
+        "sum": 1,
+        "bytes_used": 89,
+        "binary_size_in_kb": 24
+      },
+      "ack_3_9": {
+        "time_startup": 0,
+        "time_main": 66,
+        "time_pp": 13,
+        "sum": 66,
+        "bytes_used": 44673,
+        "binary_size_in_kb": 1
+      },
+      "sm_gauss_nat": {
+        "time_startup": 1,
+        "time_main": 35,
+        "time_pp": 0,
+        "sum": 36,
+        "bytes_used": 28140,
+        "binary_size_in_kb": 45
+      },
+      "sm_gauss_N": {
+        "time_startup": 0,
+        "time_main": 15,
+        "time_pp": 0,
+        "sum": 15,
+        "bytes_used": 12248,
+        "binary_size_in_kb": 15
+      },
+      "sm_gauss_PrimInt": {
+        "time_startup": 2,
+        "time_main": 13,
+        "time_pp": 0,
+        "sum": 15,
+        "bytes_used": 12144,
+        "binary_size_in_kb": 10
+      }
+    },
+    "after": {
+      "demo1": {
+        "time_startup": 1,
+        "time_main": 1,
+        "time_pp": 7,
+        "sum": 2,
+        "bytes_used": 22,
+        "binary_size_in_kb": 37
+      },
+      "demo2": {
+        "time_startup": 0,
+        "time_main": 0,
+        "time_pp": 2,
+        "sum": 0,
+        "bytes_used": 5,
+        "binary_size_in_kb": 10
+      },
+      "list_sum": {
+        "time_startup": 0,
+        "time_main": 0,
+        "time_pp": 0,
+        "sum": 0,
+        "bytes_used": 43,
+        "binary_size_in_kb": 11
+      },
+      "vs_easy": {
+        "time_startup": 2,
+        "time_main": 13,
+        "time_pp": 0,
+        "sum": 15,
+        "bytes_used": 6128,
+        "binary_size_in_kb": 186
+      },
+      "vs_hard": {
+        "time_startup": 2,
+        "time_main": 62,
+        "time_pp": 0,
+        "sum": 64,
+        "bytes_used": 38141,
+        "binary_size_in_kb": 186
+      },
+      "binom": {
+        "time_startup": 1,
+        "time_main": 8,
+        "time_pp": 7,
+        "sum": 9,
+        "bytes_used": 248,
+        "binary_size_in_kb": 168
+      },
+      "color": {
+        "time_startup": 4,
+        "time_main": 36,
+        "time_pp": 0,
+        "sum": 40,
+        "bytes_used": 16515,
+        "binary_size_in_kb": 865
+      },
+      "sha_fast": {
+        "time_startup": 2,
+        "time_main": 44,
+        "time_pp": 2,
+        "sum": 46,
+        "bytes_used": 25642,
+        "binary_size_in_kb": 330
+      },
+      "even_10000": {
+        "time_startup": 1,
+        "time_main": 0,
+        "time_pp": 0,
+        "sum": 1,
+        "bytes_used": 89,
+        "binary_size_in_kb": 30
+      },
+      "ack_3_9": {
+        "time_startup": 1,
+        "time_main": 68,
+        "time_pp": 13,
+        "sum": 69,
+        "bytes_used": 44673,
+        "binary_size_in_kb": 6
+      },
+      "sm_gauss_nat": {
+        "time_startup": 1,
+        "time_main": 36,
+        "time_pp": 0,
+        "sum": 37,
+        "bytes_used": 28140,
+        "binary_size_in_kb": 50
+      },
+      "sm_gauss_N": {
+        "time_startup": 1,
+        "time_main": 14,
+        "time_pp": 0,
+        "sum": 15,
+        "bytes_used": 12248,
+        "binary_size_in_kb": 21
+      },
+      "sm_gauss_PrimInt": {
+        "time_startup": 1,
+        "time_main": 15,
+        "time_pp": 0,
+        "sum": 16,
+        "bytes_used": 12144,
+        "binary_size_in_kb": 16
+      }
+    }
+  }
+}

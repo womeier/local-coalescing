@@ -74,7 +74,7 @@ Definition coalesce_module_correct_statement : Prop :=
 
 ### TCB
 WasmCert's binary parsing and printing are currently unverified and trusted.
-We don't introduce any axioms in addition to WasmCert.
+We don't introduce any axioms in this work. In the extraction `nat` values are mapped to OCaml's native `int`.
 ```sh
 just print_assumptions
 ```
@@ -88,7 +88,9 @@ These models are good enough to prove known-to-be-correct statements from their 
 But they are generally not good enough to overcome obstacles and generalize statements, I used Claude Opus 5 for proofs.
 
 ### Evaluation
-TODO
+Debian Linux, Node 24.19, wasm-opt (binaryen) 132
+
+![Run time of each benchmark's main, unoptimized against wasm-opt -O2, wasm-opt --coalesce-locals, and this pass](./evaluation/figure.png)
 
 ### References
 - WasmCert-Coq: <https://github.com/WasmCert/WasmCert-Coq>
