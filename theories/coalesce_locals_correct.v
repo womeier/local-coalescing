@@ -267,7 +267,7 @@ Qed.
    the context was going to kill would otherwise come back to life with no
    way to re-establish agreement for it.  With the trap killing, the live
    set after a trap is empty and there is nothing to re-establish. *)
-Fixpoint ai_kills (i : N) (e : administrative_instruction) {struct e} : bool :=
+Fixpoint ai_kills (i : N) (e : administrative_instruction) : bool :=
   let fix esk (es : list administrative_instruction) : bool :=
     match es with
     | [] => false
@@ -304,7 +304,7 @@ Qed.
    set of a filled context *equal* the live set of its hole, rather than
    merely contain it -- and that equality is what r_label needs, since it
    has to hand the invariant down to the hole and get it back afterwards. *)
-Fixpoint ai_live (i : N) (e : administrative_instruction) {struct e} : bool :=
+Fixpoint ai_live (i : N) (e : administrative_instruction) : bool :=
   let fix esl (es : list administrative_instruction) : bool :=
     match es with
     | [] => false
@@ -399,7 +399,7 @@ Proof.
   reflexivity.
 Qed.
 
-Fixpoint ai_writes (e : administrative_instruction) {struct e} : bool :=
+Fixpoint ai_writes (e : administrative_instruction) : bool :=
   let fix esw (es : list administrative_instruction) : bool :=
     match es with
     | [] => false
@@ -488,7 +488,7 @@ Proof.
   reflexivity.
 Qed.
 
-Fixpoint ai_br (e : administrative_instruction) {struct e} : bool :=
+Fixpoint ai_br (e : administrative_instruction) : bool :=
   let fix esb (es : list administrative_instruction) : bool :=
     match es with
     | [] => false
@@ -543,7 +543,7 @@ Qed.
    and kill-freedom does not: a write nested in a block does not kill
    (a branch may skip the block), but r_block turns that block into a
    label whose body does kill. *)
-Fixpoint ai_hazard (e : administrative_instruction) {struct e} : bool :=
+Fixpoint ai_hazard (e : administrative_instruction) : bool :=
   let fix esh (es : list administrative_instruction) : bool :=
     match es with
     | [] => false
@@ -1037,7 +1037,7 @@ Fixpoint bi_ind' (P : basic_instruction -> Prop)
   (Hblock : forall bt bs, Forall P bs -> P (BI_block bt bs))
   (Hloop : forall bt bs, Forall P bs -> P (BI_loop bt bs))
   (Hif : forall bt b1 b2, Forall P b1 -> Forall P b2 -> P (BI_if bt b1 b2))
-  (b : basic_instruction) {struct b} : P b :=
+  (b : basic_instruction) : P b :=
   let fix fa (bs : list basic_instruction) : Forall P bs :=
     match bs with
     | nil => Forall_nil P

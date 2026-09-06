@@ -14,12 +14,12 @@ the pass is free to reuse.
 
 The `wasm-opt` column is `wasm-opt --coalesce-locals` run on the same
 input, as the reference point for what this pass is trying to do.  It is
-not a target to match: binaryen's pass rewrites the declaration vector,
-and ours deliberately does not (`apply_phi_func` in
-theories/coalesce_locals.v copies modfunc_locals through verbatim and
-only renumbers the body), so the two columns are not measuring equal
-work.  The column is here to show the size of the gap, and to move once
-the pass starts truncating the vector.
+not a target to match: binaryen's pass rewrites the declaration vector
+freely, while ours only ever drops a suffix of it (`coalesce_func` in
+theories/coalesce_locals.v renumbers the body and truncates
+modfunc_locals to the slots the renaming still reaches), so the two
+columns are not measuring equal work.  The column is here to show the
+size of the gap.
 
 Counting is done on the .wat rather than the binary because that is the
 artifact a reader will actually open, so the numbers and the file they

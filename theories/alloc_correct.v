@@ -515,7 +515,7 @@ Lemma walk_if_eq : forall pc n d st bt b1 b2,
 Proof. reflexivity. Qed.
 
 (* A size measure that mirrors the walk's position counting. *)
-Fixpoint bi_size (b : basic_instruction) {struct b} : nat :=
+Fixpoint bi_size (b : basic_instruction) : nat :=
   let fix bss (bs : list basic_instruction) : nat :=
     match bs with
     | [] => 0
@@ -2790,7 +2790,7 @@ Theorem coalesce_func_related : forall tys pc n t f,
 Proof.
   intros tys pc n t f Huni Hc.
   unfold coalescable in Hc.
-  unfold coalesce_func, apply_phi_func, compute_phi. cbn [modfunc_body].
+  unfold coalesce_func, compute_phi. cbn [modfunc_body].
   rewrite Hc.
   apply (rel_bs_of_walk (bs_size f.(modfunc_body)) tys pc n t
            (walk_func pc n f.(modfunc_body)) _ f.(modfunc_body) 0

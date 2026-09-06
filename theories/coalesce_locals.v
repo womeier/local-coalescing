@@ -7,9 +7,6 @@ Import Bool ssreflect BinNat ListNotations.
 
 Module M := FMapAVL.Make (N_as_OT).
 
-Notation "x |-> y" := (M.add x y M.empty) (at level 60, no associativity).
-Notation "x !! i" := (M.find i x) (at level 60, no associativity).
-
 Definition local_map := M.t localidx.
 Definition empty := M.empty localidx.
 
@@ -34,27 +31,6 @@ Fixpoint apply_phi (phi : local_map) (i : basic_instruction) :
   | _                 => i
   end.
 
-(* The rename alone, leaving the declared locals as they were.
-   [coalesce_func] below is this plus the truncation; the two are kept
-   apart because only the rename is shape-preserving, and it is the
-   rename that the simulation is proved over. *)
-Definition apply_phi_func (phi : local_map) (f : module_func) : module_func :=
-  {| modfunc_type   := f.(modfunc_type);
-     modfunc_locals := f.(modfunc_locals);
-     modfunc_body   := List.map (apply_phi phi) f.(modfunc_body) |}.
-
-Definition apply_phi_module (phi : local_map) (m : module) : module :=
-  {| mod_types   := m.(mod_types);
-     mod_funcs   := List.map (apply_phi_func phi) m.(mod_funcs);
-     mod_tables  := m.(mod_tables);
-     mod_mems    := m.(mod_mems);
-     mod_globals := m.(mod_globals);
-     mod_elems   := m.(mod_elems);
-     mod_datas   := m.(mod_datas);
-     mod_start   := m.(mod_start);
-     mod_imports  := m.(mod_imports);
-     mod_exports  := m.(mod_exports) |}.
-
 (* ── Syntactic queries on a body ───────────────────────────────────
    Does a body write a local, and does it branch.  Both are used twice:
    here, to gate the walk below, and in coalesce_locals_correct.v, where
@@ -70,7 +46,7 @@ Definition apply_phi_module (phi : local_map) (m : module) : module :=
    alternating between basic_instruction and lists of them is not
    accepted. *)
 
-Fixpoint bi_writes (b : basic_instruction) {struct b} : bool :=
+Fixpoint bi_writes (b : basic_instruction) : bool :=
   let fix bsw (bs : list basic_instruction) : bool :=
     match bs with
     | [] => false
@@ -91,7 +67,7 @@ Fixpoint bs_writes (bs : list basic_instruction) : bool :=
   | b :: rest => bi_writes b || bs_writes rest
   end.
 
-Fixpoint bi_br (b : basic_instruction) {struct b} : bool :=
+Fixpoint bi_br (b : basic_instruction) : bool :=
   let fix bsb (bs : list basic_instruction) : bool :=
     match bs with
     | [] => false
@@ -152,7 +128,7 @@ Definition bi_kills (i : N) (b : basic_instruction) : bool :=
    mutual Fixpoint: Rocq's guard checker rejects mutual recursion that
    alternates between a type and lists of it.  bi_live_block / _loop / _if
    below recover the equations one would have written directly. *)
-Fixpoint bi_live (i : N) (b : basic_instruction) {struct b} : bool :=
+Fixpoint bi_live (i : N) (b : basic_instruction) : bool :=
   let fix bsl (bs : list basic_instruction) : bool :=
     match bs with
     | [] => false
@@ -472,7 +448,7 @@ Fixpoint linear_scan_loop
   (param_count n : N)
   (intervals : list (localidx * nat * nat))
   (active : list (N * nat))
-  (phi : local_map) {struct intervals} : local_map :=
+  (phi : local_map) : local_map :=
   match intervals with
   | [] => phi
   | (idx, def_pos, last_use_pos) :: rest =>
