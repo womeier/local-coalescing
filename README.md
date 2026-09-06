@@ -108,8 +108,7 @@ But they are generally not good enough to overcome obstacles and generalize stat
 ### Evaluation
 Debian Linux, Node 24.19, wasm-opt (binaryen) 132
 
-Run time of each benchmark's `main`, unoptimized against the two binaryen
-references and this pass: [`evaluation/figure.png`](./evaluation/figure.png)
+![Run time of each benchmark's main, unoptimized against wasm-opt -O2, wasm-opt --coalesce-locals, and this pass](./evaluation/figure.png)
 
 ### References
 - WasmCert-Coq: <https://github.com/WasmCert/WasmCert-Coq>
