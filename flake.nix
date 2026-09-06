@@ -27,12 +27,6 @@
 
         mcp = import ./mcp.nix { inherit pkgs lib; };
 
-        # Typst with lilaq vendored in, so the evaluation figure builds without network access.
-        typstEnv = pkgs.typst.wrapper {
-          packages = ps: [ ps.lilaq_0_6_0 ];
-          fonts = [ "${pkgs.lmodern}/share/fonts" ];
-        };
-
         # The parser patch shares the leaf parsers (u32, u8, s32, s64,
         # value_type, memarg) across the instruction grammar instead of
         # re-elaborating them at every use site.  A parseque parser is indexed
@@ -75,24 +69,6 @@
         packages.rocq-mcp = mcp.rocq-mcp;
         packages.rocq-mcp-wheelhouse = mcp.rocq-mcp-wheelhouse;
         packages.pytanque = mcp.pytanque;
-        packages.figure = pkgs.stdenv.mkDerivation {
-          pname = "figure";
-          name = "figure";
-          src = ./evaluation;
-          buildInputs = [
-            typstEnv
-            pkgs.git
-            pkgs.gnumake
-          ];
-          buildPhase = ''
-            export HOME=$TMPDIR
-            make build
-          '';
-          installPhase = ''
-            mkdir -p $out/
-            cp ./figure.png $out/
-          '';
-        };
         devShells.default = pkgs.mkShell {
           name = "wasm-opt-cert";
           packages = [
@@ -113,8 +89,6 @@
             pkgs.python3
             pkgs.python3Packages.click
             pkgs.python3Packages.tqdm
-            pkgs.typst
-            pkgs.gnumake
             ocaml
             rocq-core.ocamlPackages.findlib
             mcp.rocq-mcp

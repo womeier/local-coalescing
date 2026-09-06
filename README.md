@@ -106,7 +106,23 @@ These models are good enough to prove known-to-be-correct statements from their 
 But they are generally not good enough to overcome obstacles and generalize statements, I used Claude Opus 5 for proofs.
 
 ### Evaluation
-TODO
+```
+run time (ms):
+                     before    after   change
+           demo1 :        2        1   -50.0%
+           demo2 :        1        1    +0.0%
+        list_sum :        0        1      N/A
+         vs_easy :       17       15   -11.8%
+         vs_hard :       65       64    -1.5%
+           binom :       15        9   -40.0%
+           color :      187       40   -78.6%
+        sha_fast :       61       45   -26.2%
+      even_10000 :        1        1    +0.0%
+         ack_3_9 :       70       69    -1.4%
+    sm_gauss_nat :       38       36    -5.3%
+      sm_gauss_N :       15       16    +6.7%
+sm_gauss_PrimInt :       15       15    +0.0%
+```
 
 ### References
 - WasmCert-Coq: <https://github.com/WasmCert/WasmCert-Coq>
