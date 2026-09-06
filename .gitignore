@@ -12,3 +12,6 @@ sha.glob
 result
 examples/regression/*.opt.wasm
 !examples/regression/*.wat
+evaluation/before-O2/
+evaluation/after-O2/
+evaluation/before-cl/
