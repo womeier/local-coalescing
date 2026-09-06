@@ -3,9 +3,10 @@
  (extracted_files pipeline.ml pipeline.mli)
  (theories Wasm Stdlib Wasmopt mathcomp compcert ExtLib Flocq HB parseque elpi elpi_elpi))
 
-(executable
- (name main)
- (public_name wasm-opt-cert)
+(executables
+ (names main main_timed)
+ (public_names wasm-opt-cert -)
  (package rocq-wasm-opt-cert)
  (flags :standard -w -a)
- (modules main pipeline))
+ (libraries unix)
+ (modules main main_timed pipeline))

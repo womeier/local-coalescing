@@ -33,6 +33,13 @@
           fonts = [ "${pkgs.lmodern}/share/fonts" ];
         };
 
+        # The parser patch shares the leaf parsers (u32, u8, s32, s64,
+        # value_type, memarg) across the instruction grammar instead of
+        # re-elaborating them at every use site.  A parseque parser is indexed
+        # by the remaining input size, so each *reference* rebuilds it, and
+        # the grammar is rebuilt once per instruction parsed -- 15.6M parser
+        # constructions for 175KB of input.  Sharing them cuts parsing of
+        # examples/sha.wasm from 22.6s to 4.5s, with byte-identical output.
         wasmcert-master = coqPackages.wasmcert.overrideAttrs (old: {
           version = "master";
           src = pkgs.fetchFromGitHub {
@@ -41,6 +48,7 @@
             rev = "5e6df8d60c94aa5dbeff633f5eb48caa6c64c225";
             hash = "sha256-3V7qLB6mXRvqlAxJPV6b8wv0qJBtqrMP0B923wOiMxo=";
           };
+          patches = (old.patches or [ ]) ++ [ ./patches/wasmcert-share-leaf-parsers.patch ];
         });
 
         wasm-opt-cert = rocqPackages.mkRocqDerivation {

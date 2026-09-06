@@ -23,7 +23,32 @@ let string_of_char_list l =
   List.iter (Buffer.add_char buf) l;
   Buffer.contents buf
 
+(* WasmCert's parser and printer recurse once per instruction (List.map and
+   friends are not tail-recursive), so the stack grows with the size of the
+   function being processed: ~5.5MB for sha.wasm, ~45MB for a 412k-instruction
+   CertiRocq benchmark.  The usual 8MB default is not enough, and the failure
+   is a bare Stack_overflow rather than anything diagnostic.
+
+   The limit has to be raised *before* exec: Linux places the mmap region
+   using RLIMIT_STACK as it stands at exec time, so a process that raises its
+   own limit afterwards still cannot grow the stack past that placement.  So
+   re-exec ourselves once through sh with the limit lifted, marking the
+   environment so the second run proceeds normally.  If anything about that
+   fails we fall through and run anyway -- small inputs do not need it. *)
+let raise_stack_limit () =
+  if Sys.getenv_opt "WASM_OPT_CERT_STACK" = None then begin
+    Unix.putenv "WASM_OPT_CERT_STACK" "1";
+    let script =
+      "{ ulimit -s unlimited || ulimit -s \"$(ulimit -Hs)\"; } 2>/dev/null; \
+       exec \"$0\" \"$@\"" in
+    let rest = Array.sub Sys.argv 1 (Array.length Sys.argv - 1) in
+    let argv =
+      Array.append [| "/bin/sh"; "-c"; script; Sys.executable_name |] rest in
+    try Unix.execv "/bin/sh" argv with Unix.Unix_error _ -> ()
+  end
+
 let () =
+  raise_stack_limit ();
   if Array.length Sys.argv <> 3 then begin
     Printf.eprintf "Usage: %s <input.wasm> <output.wasm>\n" Sys.argv.(0);
     exit 1
