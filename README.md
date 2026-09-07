@@ -100,3 +100,4 @@ Running the extracted optimizer is very slow. Partly due to WasmCert's unoptimiz
 - WasmCert-Coq: <https://github.com/WasmCert/WasmCert-Coq>
 - Linear Scan Register Allocation (Poletto & Sarkar, PLDI 1999): <https://dl.acm.org/doi/epdf/10.1145/330249.330250>
 - Validating register allocation and spilling: <https://inria.hal.science/inria-00529841/document>
+- Binaryen: <https://github.com/WebAssembly/binaryen>
